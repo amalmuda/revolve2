@@ -13,9 +13,9 @@ from revolve2.modular_robot.brain.cpg import (
 # These are set of parameters that we optimized using CMA-ES.
 # You can copy your own parameters from the optimization output log.
 PARAMS = np.array(
-     [0.61963971, -0.95057239, -0.80086183,  0.85476812,  0.9900907 ,
-       -0.98395366, -0.8189385 ,  0.75633558,  0.7919909 , -0.6270689 ,
-        0.99337645, -0.60268167]
+      [0.62248148, -0.95225013, -0.80867508,  0.85181333,  0.99094499,
+       -0.98966582, -0.80806261,  0.76988206,  0.79472574, -0.63070308,
+        0.99524088, -0.60691992]
 )
 
 

@@ -10,6 +10,9 @@
 #SBATCH --output=logs/slurm-%A_%a.out
 #SBATCH --error=logs/slurm-%A_%a.err
 
+# Navigate to experiments directory
+cd ~/revolve2/experiments
+
 # Create logs directory if it doesn't exist
 mkdir -p logs
 
@@ -24,7 +27,7 @@ echo "Node: $SLURMD_NODENAME"
 echo "=========================================="
 
 # Run the evolution with specified run ID
-~/masteroppgave/.venv/bin/python3 main.py
+~/myenv/bin/python3 main.py
 
 echo "=========================================="
 echo "Evolution completed"
