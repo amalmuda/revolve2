@@ -1,6 +1,8 @@
 """Main script for the experiment."""
 
+import csv
 import logging
+import os
 
 import cma
 import numpy as np
@@ -17,7 +19,14 @@ from revolve2.modular_robot.brain.cpg import (
 
 def main() -> None:
     """Run the experiment."""
-    setup_logging(file_name="log.txt")
+    # Get run ID from SLURM array task ID if available
+    run_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", "0"))
+
+    # Setup logging with unique filename
+    log_filename = f"log_run{run_id}.txt" if run_id > 0 else "log.txt"
+    setup_logging(file_name=log_filename)
+
+    logging.info(f"Starting run {run_id}")
 
     # Find all active hinges in the body
     active_hinges = config.BODY.find_modules_of_type(ActiveHinge)
@@ -53,6 +62,14 @@ def main() -> None:
 
     generation_index = 0
 
+    # Track evolution history for plotting
+    history = {
+        'generation': [],
+        'best_fitness': [],
+        'best_distance': [],
+        'best_contact_ratio': [],
+    }
+
     # Run cma for the defined number of generations.
     logging.info("Start optimization process.")
     while generation_index < config.NUM_GENERATIONS:
@@ -71,12 +88,45 @@ def main() -> None:
         best_idx = fitnesses.argmin()  # Min negative fitness = max actual fitness
         best_distance = evaluator.last_distances[best_idx]
         best_contact_ratio = evaluator.last_contact_ratios[best_idx]
+        best_fitness = -fitnesses[best_idx]  # Convert back to positive
+
+        # Store in history
+        history['generation'].append(generation_index + 1)
+        history['best_fitness'].append(best_fitness)
+        history['best_distance'].append(best_distance)
+        history['best_contact_ratio'].append(best_contact_ratio)
 
         logging.info(f"{opt.result.xbest=} {opt.result.fbest=}")
         logging.info(f"Best this gen: distance={best_distance:.4f}m, non_leaf_contact={best_contact_ratio:.1%}")
 
         # Increase the generation index counter.
         generation_index += 1
+
+    # Save evolution history as CSV for plotting
+    csv_filename = f"evolution_run{run_id}.csv" if run_id > 0 else "evolution.csv"
+    with open(csv_filename, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['generation', 'fitness', 'distance', 'contact_ratio'])
+        for i in range(len(history['generation'])):
+            writer.writerow([
+                history['generation'][i],
+                history['best_fitness'][i],
+                history['best_distance'][i],
+                history['best_contact_ratio'][i]
+            ])
+    logging.info(f"Evolution history saved to {csv_filename}")
+
+    # Save final results
+    results_filename = f"results_run{run_id}.npz" if run_id > 0 else "results.npz"
+    np.savez(
+        results_filename,
+        best_params=opt.result.xbest,
+        best_fitness=-opt.result.fbest,
+        run_id=run_id,
+        num_generations=config.NUM_GENERATIONS,
+    )
+    logging.info(f"Results saved to {results_filename}")
+    logging.info(f"Final best fitness: {-opt.result.fbest:.4f}")
 
 
 if __name__ == "__main__":
