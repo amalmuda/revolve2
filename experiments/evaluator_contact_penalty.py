@@ -192,7 +192,7 @@ class Evaluator:
                 non_leaf_ratio = 0.0
 
             # Apply multiplicative penalty: fitness = distance * (1 - non_leaf_ratio)
-            fitness = distance * (1.0 - non_leaf_ratio)
+            fitness = distance * (1.0 - non_leaf_ratio**0.5)**2
 
             fitnesses.append(fitness)
             self.last_distances.append(distance)
