@@ -91,16 +91,16 @@ class EvaluatorWithContactsViz:
             # Create viewer if not headless
             viewer = None
             if not headless:
-                viewer = CustomMujocoViewer(
-                    model,
-                    data,
-                    width=None,
-                    height=None,
-                    backend=RenderBackend.GLFW,
-                    start_paused=False,
-                    render_every_frame=False,
-                    hide_menus=False,
-                )
+            viewer = CustomMujocoViewer(
+                model,
+                data,
+                width=640,
+                height=480,
+                backend=RenderBackend.GLFW,
+                start_paused=False,
+                render_every_frame=False,
+                hide_menus=False,
+            )
 
             # Get robot body ID
             multi_body_system = robot_mapping[UUIDKey(robot)]

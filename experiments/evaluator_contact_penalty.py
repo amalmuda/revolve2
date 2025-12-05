@@ -7,7 +7,7 @@ import numpy as np
 import numpy.typing as npt
 
 from revolve2.modular_robot import ModularRobot
-from revolve2.modular_robot.body.base import ActiveHinge, Body
+from revolve2.modular_robot.body.base import ActiveHinge, Body, Brick
 from revolve2.modular_robot.brain.cpg import BrainCpgNetworkStatic, CpgNetworkStructure
 from revolve2.modular_robot_simulation import ModularRobotScene
 from revolve2.simulation.scene import UUIDKey
@@ -27,6 +27,18 @@ class Evaluator:
     _output_mapping: list[tuple[int, ActiveHinge]]
     last_distances: list[float]
     last_contact_ratios: list[float]
+
+    @staticmethod
+    def _is_leaf_brick(brick: Brick) -> bool:
+        """Check if a brick is a leaf (has no children attached)."""
+        # Check all attachment points (bricks have 3: front, left, right)
+        if brick.front is not None:
+            return False
+        if brick.left is not None:
+            return False
+        if brick.right is not None:
+            return False
+        return True
 
     def __init__(
         self,
@@ -67,9 +79,6 @@ class Evaluator:
         fitnesses = []
         self.last_distances = []
         self.last_contact_ratios = []
-
-        # Non-leaf bodies: Core (2) + ActiveHinges (3, 5, 7, 9)
-        non_leaf_bodies = {2, 3, 5, 7, 9}
 
         for params in solutions:
             # Create robot
@@ -116,6 +125,38 @@ class Evaluator:
                 body_id = model.geom_bodyid[i]
                 if body_id <= 1:
                     terrain_geom_ids.add(i)
+
+            # Identify leaf brick bodies using MuJoCo body hierarchy
+            # A body is a leaf if no other bodies have it as a parent
+            leaf_brick_body_ids = set()
+
+            # Build parent-child relationships
+            children_count = {}
+            for i in range(model.nbody):
+                children_count[i] = 0
+
+            for i in range(model.nbody):
+                parent_id = model.body_parentid[i]
+                if parent_id >= 0:
+                    children_count[parent_id] += 1
+
+            # Find leaf bricks: brick bodies with no children
+            for i in range(model.nbody):
+                body_name = model.body(i).name.lower()
+                if "brick" in body_name and children_count[i] == 0:
+                    leaf_brick_body_ids.add(i)
+
+            # Collect all robot body IDs
+            all_robot_body_ids = set()
+            for i in range(model.ngeom):
+                body_id = model.geom_bodyid[i]
+                geom_id = i
+                # Robot geometries are those not in terrain
+                if geom_id not in terrain_geom_ids and body_id > 1:
+                    all_robot_body_ids.add(body_id)
+
+            # Non-leaf bodies: all robot bodies except leaf bricks
+            non_leaf_bodies = all_robot_body_ids - leaf_brick_body_ids
 
             # Contact tracking (per-step unique body contacts)
             steps = 0
