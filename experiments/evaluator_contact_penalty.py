@@ -1,7 +1,6 @@
 """Evaluator with contact-based fitness penalty."""
 
 import math
-from collections import defaultdict
 
 import mujoco
 import numpy as np
@@ -118,8 +117,9 @@ class Evaluator:
                 if body_id <= 1:
                     terrain_geom_ids.add(i)
 
-            # Contact tracking
-            contact_data = defaultdict(int)
+            # Contact tracking (per-step unique body contacts)
+            steps = 0
+            non_leaf_touch_sum = 0
 
             # Initialize
             mujoco.mj_forward(model, data)
@@ -153,7 +153,10 @@ class Evaluator:
                 # Step simulation
                 mujoco.mj_step(model, data)
 
-                # Collect contacts
+                steps += 1
+
+                # Collect unique robot bodies that touched terrain this step
+                touching_bodies = set()
                 for i in range(data.ncon):
                     contact = data.contact[i]
                     geom1 = int(contact.geom1)
@@ -167,7 +170,10 @@ class Evaluator:
 
                     if robot_geom is not None:
                         body_id = int(model.geom_bodyid[robot_geom])
-                        contact_data[body_id] += 1
+                        touching_bodies.add(body_id)
+
+                # Count how many non-leaf bodies were touching in this step
+                non_leaf_touch_sum += len(touching_bodies & non_leaf_bodies)
 
             # Get final position
             final_pos = data.xpos[robot_body_id].copy()
@@ -180,14 +186,10 @@ class Evaluator:
                 )
             )
 
-            # Calculate non-leaf contact ratio
-            total_contacts = sum(contact_data.values())
-            non_leaf_contacts = sum(
-                contact_data.get(body_id, 0) for body_id in non_leaf_bodies
-            )
-
-            if total_contacts > 0:
-                non_leaf_ratio = non_leaf_contacts / total_contacts
+            # Calculate non-leaf contact ratio:
+            # average fraction of non-leaf bodies touching per timestep.
+            if steps > 0:
+                non_leaf_ratio = non_leaf_touch_sum / (len(non_leaf_bodies) * steps)
             else:
                 non_leaf_ratio = 0.0
 
