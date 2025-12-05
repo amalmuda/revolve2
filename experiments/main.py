@@ -22,11 +22,29 @@ def main() -> None:
     # Get run ID from SLURM array task ID if available
     run_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", "0"))
 
-    # Setup logging with unique filename
-    log_filename = f"log_run{run_id}.txt" if run_id > 0 else "log.txt"
+    # Get experiment name from environment variable
+    # If not set, use SLURM job ID as fallback, or default to "default_experiment"
+    experiment_name = os.environ.get("EXPERIMENT_NAME")
+    if not experiment_name:
+        job_id = os.environ.get("SLURM_ARRAY_JOB_ID")
+        if job_id:
+            experiment_name = f"exp_{job_id}"
+        else:
+            experiment_name = "default_experiment"
+
+    results_dir = f"results/{experiment_name}"
+    os.makedirs(results_dir, exist_ok=True)
+
+    # Setup logging with run-specific filename
+    if run_id > 0:
+        log_filename = f"{results_dir}/log_run{run_id}.txt"
+    else:
+        log_filename = f"{results_dir}/log.txt"
     setup_logging(file_name=log_filename)
 
+    logging.info(f"Experiment: {experiment_name}")
     logging.info(f"Starting run {run_id}")
+    logging.info(f"Results directory: {results_dir}")
 
     # Find all active hinges in the body
     active_hinges = config.BODY.find_modules_of_type(ActiveHinge)
@@ -103,7 +121,13 @@ def main() -> None:
         generation_index += 1
 
     # Save evolution history as CSV for plotting
-    csv_filename = f"evolution_run{run_id}.csv" if run_id > 0 else "evolution.csv"
+    if run_id > 0:
+        csv_filename = f"{results_dir}/evolution_run{run_id}.csv"
+        results_filename = f"{results_dir}/results_run{run_id}.npz"
+    else:
+        csv_filename = f"{results_dir}/evolution.csv"
+        results_filename = f"{results_dir}/results.npz"
+
     with open(csv_filename, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['generation', 'fitness', 'distance', 'contact_ratio'])
@@ -117,7 +141,6 @@ def main() -> None:
     logging.info(f"Evolution history saved to {csv_filename}")
 
     # Save final results
-    results_filename = f"results_run{run_id}.npz" if run_id > 0 else "results.npz"
     np.savez(
         results_filename,
         best_params=opt.result.xbest,

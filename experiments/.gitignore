@@ -1,0 +1,49 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Experiment results and outputs
+results/
+*.npz
+
+# SLURM logs
+slurm/logs_*/
+
+# Python package metadata
+*.egg-info/
+dist/
+build/
+
+# Testing and linting
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Plots and visualizations (optional - uncomment if you want to ignore them)
+# *.png
+# *.jpg
+# *.pdf
