@@ -1,0 +1,35 @@
+==========================================
+Starting contact penalty evolution
+Array Task ID: 5
+Run ID: 5
+Node: c1-6
+==========================================
+(5_w,11)-aCMA-ES (mu_w=3.4,w_1=42%) in dimension 12 (seed=2447275587, Fri Dec  5 00:20:08 2025)
+==========================================
+Evolution completed
+Run ID: 5
+===========================================
+
+Job 2173864 consumed 39.3 billing hours from project ec29.
+
+Submitted 2025-12-05T00:19:36; waited 21.0 seconds in the queue after becoming eligible to run.
+
+Requested wallclock time: 5.0 hours
+Elapsed wallclock time:   3.6 hours
+
+Job exited normally.
+
+Task and CPU statistics:
+ID             CPUs  Tasks  CPU util                Start  Elapsed  Exit status
+2173864          11            0.0 %  2025-12-05T00:19:57    3.6 h  0
+2173864.batch    11      1     9.0 %  2025-12-05T00:19:57    3.6 h  0
+
+Used CPU time:   3.5 CPU hours
+Unused CPU time: 1.5 CPU days
+
+Memory statistics, in GiB:
+ID              Alloc   Usage
+2173864          44.0        
+2173864.batch    44.0     0.1
+
+Job 2173864 completed at Fri Dec 5 03:54:20 CET 2025

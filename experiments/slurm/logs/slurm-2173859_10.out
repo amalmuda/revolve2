@@ -1,0 +1,37 @@
+Starting job 2173859 on c1-19 on Fox at Fri Dec 5 00:27:30 CET 2025
+
+==========================================
+Starting contact penalty evolution
+Array Task ID: 10
+Run ID: 10
+Node: c1-19
+==========================================
+(5_w,11)-aCMA-ES (mu_w=3.4,w_1=42%) in dimension 12 (seed=2893678114, Fri Dec  5 00:27:34 2025)
+==========================================
+Evolution completed
+Run ID: 10
+===========================================
+
+Job 2173859 consumed 34.4 billing hours from project ec29.
+
+Submitted 2025-12-05T00:19:36; waited 7.9 minutes in the queue after becoming eligible to run.
+
+Requested wallclock time: 5.0 hours
+Elapsed wallclock time:   3.1 hours
+
+Job exited normally.
+
+Task and CPU statistics:
+ID             CPUs  Tasks  CPU util                Start  Elapsed  Exit status
+2173859          11            0.0 %  2025-12-05T00:27:29    3.1 h  0
+2173859.batch    11      1     9.0 %  2025-12-05T00:27:29    3.1 h  0
+
+Used CPU time:   3.1 CPU hours
+Unused CPU time: 1.3 CPU days
+
+Memory statistics, in GiB:
+ID              Alloc   Usage
+2173859          44.0        
+2173859.batch    44.0     0.1
+
+Job 2173859 completed at Fri Dec 5 03:34:55 CET 2025
