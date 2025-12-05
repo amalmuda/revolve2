@@ -42,9 +42,13 @@ def main() -> None:
         log_filename = f"{results_dir}/log.txt"
     setup_logging(file_name=log_filename)
 
+    # Get contact mode from environment variable or config
+    contact_mode = os.environ.get("CONTACT_MODE", config.CONTACT_MODE)
+
     logging.info(f"Experiment: {experiment_name}")
     logging.info(f"Starting run {run_id}")
     logging.info(f"Results directory: {results_dir}")
+    logging.info(f"Contact penalty mode: {contact_mode}")
 
     # Find all active hinges in the body
     active_hinges = config.BODY.find_modules_of_type(ActiveHinge)
@@ -63,6 +67,7 @@ def main() -> None:
         cpg_network_structure=cpg_network_structure,
         body=config.BODY,
         output_mapping=output_mapping,
+        contact_mode=contact_mode,
     )
 
     # Initial parameter values for the brain.

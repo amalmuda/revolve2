@@ -25,6 +25,7 @@ class Evaluator:
     _cpg_network_structure: CpgNetworkStructure
     _body: Body
     _output_mapping: list[tuple[int, ActiveHinge]]
+    _contact_mode: str
     last_distances: list[float]
     last_contact_ratios: list[float]
 
@@ -47,6 +48,7 @@ class Evaluator:
         cpg_network_structure: CpgNetworkStructure,
         body: Body,
         output_mapping: list[tuple[int, ActiveHinge]],
+        contact_mode: str = "counting",
     ) -> None:
         """
         Initialize this object.
@@ -56,11 +58,16 @@ class Evaluator:
         :param cpg_network_structure: Cpg structure for the brain.
         :param body: Modular body of the robot.
         :param output_mapping: Mapping between active hinges and cpg indices.
+        :param contact_mode: Contact calculation mode - "counting" or "binary".
         """
+        if contact_mode not in ["counting", "binary"]:
+            raise ValueError(f"contact_mode must be 'counting' or 'binary', got: {contact_mode}")
+
         self._terrain = terrains.flat()
         self._cpg_network_structure = cpg_network_structure
         self._body = body
         self._output_mapping = output_mapping
+        self._contact_mode = contact_mode
         self.last_distances = []
         self.last_contact_ratios = []
 
@@ -140,10 +147,10 @@ class Evaluator:
                 if parent_id >= 0:
                     children_count[parent_id] += 1
 
-            # Find leaf bricks: brick bodies with no children
+            # Find leaf bodies: robot bodies with no children (end effectors/feet)
             for i in range(model.nbody):
-                body_name = model.body(i).name.lower()
-                if "brick" in body_name and children_count[i] == 0:
+                # Leaf = robot body (not world/terrain) with no children
+                if i > 1 and children_count[i] == 0:
                     leaf_brick_body_ids.add(i)
 
             # Collect all robot body IDs
@@ -161,6 +168,7 @@ class Evaluator:
             # Contact tracking (per-step unique body contacts)
             steps = 0
             non_leaf_touch_sum = 0
+            steps_with_contact = 0  # For binary mode
 
             # Initialize
             mujoco.mj_forward(model, data)
@@ -213,8 +221,15 @@ class Evaluator:
                         body_id = int(model.geom_bodyid[robot_geom])
                         touching_bodies.add(body_id)
 
-                # Count how many non-leaf bodies were touching in this step
-                non_leaf_touch_sum += len(touching_bodies & non_leaf_bodies)
+                # Count contacts based on mode
+                touching_non_leaf = len(touching_bodies & non_leaf_bodies)
+                if self._contact_mode == "counting":
+                    # Counting mode: count how many non-leaf bodies are touching
+                    non_leaf_touch_sum += touching_non_leaf
+                else:  # binary
+                    # Binary mode: just track if ANY non-leaf body is touching
+                    if touching_non_leaf > 0:
+                        steps_with_contact += 1
 
             # Get final position
             final_pos = data.xpos[robot_body_id].copy()
@@ -227,10 +242,14 @@ class Evaluator:
                 )
             )
 
-            # Calculate non-leaf contact ratio:
-            # average fraction of non-leaf bodies touching per timestep.
+            # Calculate non-leaf contact ratio based on mode
             if steps > 0:
-                non_leaf_ratio = non_leaf_touch_sum / (len(non_leaf_bodies) * steps)
+                if self._contact_mode == "counting":
+                    # Counting: average fraction of non-leaf bodies touching per timestep
+                    non_leaf_ratio = non_leaf_touch_sum / (len(non_leaf_bodies) * steps)
+                else:  # binary
+                    # Binary: fraction of timesteps with ANY non-leaf contact
+                    non_leaf_ratio = steps_with_contact / steps
             else:
                 non_leaf_ratio = 0.0
 
