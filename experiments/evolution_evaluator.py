@@ -63,6 +63,7 @@ def evaluate_single(
     terrain_friction: float = 1.0,
     fitness_formula: str = "exponential",
     warmup_time: float = 0.0,
+    no_coupling: bool = False,
 ) -> tuple[float, LocomotionMetrics]:
     """
     Evaluate a single robot with given CPG parameters.
@@ -78,6 +79,7 @@ def evaluate_single(
             headless=True,
             terrain_friction=terrain_friction,
             warmup_time=warmup_time,
+            no_coupling=no_coupling,
         )
 
         # Select contact metric
@@ -103,9 +105,9 @@ def evaluate_single(
 
 def _evaluate_wrapper(args: tuple) -> tuple[int, float, LocomotionMetrics]:
     """Wrapper for parallel evaluation."""
-    idx, params, robot_name, sim_time, contact_metric, lambda_penalty, terrain_friction, fitness_formula, warmup_time = args
+    idx, params, robot_name, sim_time, contact_metric, lambda_penalty, terrain_friction, fitness_formula, warmup_time, no_coupling = args
     fitness, metrics = evaluate_single(
-        params, robot_name, sim_time, contact_metric, lambda_penalty, terrain_friction, fitness_formula, warmup_time
+        params, robot_name, sim_time, contact_metric, lambda_penalty, terrain_friction, fitness_formula, warmup_time, no_coupling
     )
     return idx, fitness, metrics
 
@@ -123,6 +125,7 @@ class Evaluator:
         terrain_friction: float = 1.0,
         fitness_formula: str = "exponential",
         warmup_time: float = None,
+        no_coupling: bool = False,
     ):
         """
         Initialize evaluator with configuration.
@@ -132,6 +135,7 @@ class Evaluator:
         Args:
             fitness_formula: "exponential", "power", or "linear"
             warmup_time: Time in seconds for robot to settle before measuring metrics.
+            no_coupling: If True, use only internal CPG weights (no external coupling).
         """
         self.robot_name = robot_name or config.ROBOT_NAME
         self.simulation_time = simulation_time or config.SIMULATION_TIME
@@ -141,6 +145,7 @@ class Evaluator:
         self.terrain_friction = terrain_friction
         self.fitness_formula = fitness_formula
         self.warmup_time = warmup_time if warmup_time is not None else config.WARMUP_TIME
+        self.no_coupling = no_coupling
 
         # Store all metrics from last evaluation for analysis
         self.last_metrics: list[LocomotionMetrics] = []
@@ -173,6 +178,7 @@ class Evaluator:
                     self.terrain_friction,
                     self.fitness_formula,
                     self.warmup_time,
+                    self.no_coupling,
                 )
                 fitnesses[i] = fitness
                 self.last_metrics[i] = metrics
@@ -180,7 +186,7 @@ class Evaluator:
             # Parallel evaluation using ProcessPoolExecutor
             args_list = [
                 (i, params, self.robot_name, self.simulation_time,
-                 self.contact_metric, self.lambda_penalty, self.terrain_friction, self.fitness_formula, self.warmup_time)
+                 self.contact_metric, self.lambda_penalty, self.terrain_friction, self.fitness_formula, self.warmup_time, self.no_coupling)
                 for i, params in enumerate(solutions)
             ]
 

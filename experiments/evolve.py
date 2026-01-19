@@ -27,7 +27,10 @@ from evolution_database import (
     Individual,
     Population,
 )
-from contact_detection import simulate_with_contact_detection
+from contact_detection import (
+    simulate_with_contact_detection,
+    active_hinges_to_cpg_network_structure_internal_only,
+)
 
 from revolve2.experimentation.database import OpenMethod, open_database_sqlite
 from revolve2.experimentation.logging import setup_logging
@@ -37,11 +40,19 @@ from revolve2.modular_robot.brain.cpg import active_hinges_to_cpg_network_struct
 from revolve2.standards import modular_robots_v1
 
 
-def get_num_cpg_params(robot_name: str) -> int:
-    """Get the number of CPG parameters for a robot."""
+def get_num_cpg_params(robot_name: str, no_coupling: bool = False) -> int:
+    """Get the number of CPG parameters for a robot.
+
+    Args:
+        robot_name: Name of the robot.
+        no_coupling: If True, return only internal params (no external coupling).
+    """
     body = modular_robots_v1.get(robot_name)
     active_hinges = body.find_modules_of_type(ActiveHinge)
-    cpg_network_structure, _ = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
+    if no_coupling:
+        cpg_network_structure, _ = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
+    else:
+        cpg_network_structure, _ = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
     return cpg_network_structure.num_connections
 
 
@@ -66,6 +77,7 @@ def run_evolution(
     run_num: int = None,
     fitness_formula: str = "exponential",
     results_dir: str = "results",
+    no_coupling: bool = False,
 ) -> tuple[np.ndarray, float]:
     """
     Run CMA-ES evolution to optimize CPG parameters.
@@ -133,11 +145,12 @@ def run_evolution(
     print(f"  Database:        {use_database}")
     print(f"  Seed:            {seed}")
     print(f"  Friction:        {terrain_friction}")
+    print(f"  No Coupling:     {no_coupling}")
     print("=" * 60 + "\n")
 
     # Get number of CPG parameters
-    num_params = get_num_cpg_params(robot_name)
-    print(f"Number of CPG parameters for {robot_name}: {num_params}")
+    num_params = get_num_cpg_params(robot_name, no_coupling=no_coupling)
+    print(f"Number of CPG parameters for {robot_name}: {num_params}" + (" (internal only)" if no_coupling else " (internal + external)"))
 
     # Initialize evaluator
     evaluator = Evaluator(
@@ -149,6 +162,7 @@ def run_evolution(
         terrain_friction=terrain_friction,
         fitness_formula=fitness_formula,
         warmup_time=config.WARMUP_TIME,
+        no_coupling=no_coupling,
     )
 
     # Setup database if enabled
@@ -328,6 +342,7 @@ def run_evolution(
             cpg_params=best_params.tolist(),
             headless=False,
             warmup_time=config.WARMUP_TIME,
+            no_coupling=no_coupling,
         )
 
     return best_params, best_fitness
@@ -362,6 +377,10 @@ def main():
     # Database
     parser.add_argument("--no-database", action="store_true", help="Disable database logging")
     parser.add_argument("--database", type=str, help="Database file name")
+
+    # CPG structure
+    parser.add_argument("--no-coupling", action="store_true",
+                        help="Use only internal CPG weights (no external coupling between hinges)")
 
     # Other
     parser.add_argument("--seed", type=int, help="Random seed")
@@ -410,6 +429,8 @@ def main():
         kwargs["fitness_formula"] = args.fitness_formula
     if args.results_dir:
         kwargs["results_dir"] = args.results_dir
+    if args.no_coupling:
+        kwargs["no_coupling"] = True
 
     run_evolution(**kwargs)
 

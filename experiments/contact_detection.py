@@ -21,6 +21,7 @@ from revolve2.modular_robot.body.base import ActiveHinge, Body
 from revolve2.modular_robot.brain.cpg import (
     BrainCpgNetworkNeighborRandom,
     BrainCpgNetworkStatic,
+    CpgNetworkStructure,
     active_hinges_to_cpg_network_structure_neighbor,
 )
 from revolve2.modular_robot_simulation import ModularRobotScene, Terrain
@@ -492,6 +493,25 @@ def get_contacts_with_ground(
     return contacts
 
 
+def active_hinges_to_cpg_network_structure_internal_only(
+    active_hinges: list[ActiveHinge],
+) -> tuple[CpgNetworkStructure, list[tuple[int, ActiveHinge]]]:
+    """
+    Create a CPG structure with ONLY internal weights (no external coupling).
+
+    Each hinge gets its own independent oscillator with no connections to other hinges.
+
+    :param active_hinges: The active hinges to base the structure on.
+    :returns: The created structure and a mapping between state indices and active hinges.
+    """
+    cpgs = CpgNetworkStructure.make_cpgs(len(active_hinges))
+    # Empty connections set = no external coupling
+    empty_connections: set = set()
+    cpg_network_structure = CpgNetworkStructure(cpgs, empty_connections)
+    output_mapping = list(zip(cpg_network_structure.output_indices, active_hinges))
+    return cpg_network_structure, output_mapping
+
+
 def simulate_with_contact_detection(
     robot_name: str = "spider",
     simulation_time: int = 10,
@@ -503,6 +523,7 @@ def simulate_with_contact_detection(
     cast_shadows: bool = True,
     track_camera: bool = True,
     slip_threshold: float = 0.1,
+    no_coupling: bool = False,
 ) -> tuple[ContactTracker, LocomotionMetrics]:
     """
     Run simulation with full locomotion metric tracking.
@@ -520,6 +541,7 @@ def simulate_with_contact_detection(
     :param cast_shadows: Whether to render shadows (only affects viewer mode).
     :param track_camera: Whether camera should follow the robot (only affects viewer mode).
     :param slip_threshold: Velocity threshold (m/s) for foot slip detection.
+    :param no_coupling: If True, use only internal CPG weights (no external coupling between hinges).
     :returns: Tuple of (ContactTracker, LocomotionMetrics).
     """
     # Validate warmup_time
@@ -535,7 +557,12 @@ def simulate_with_contact_detection(
     # Create robot - following the CMA-ES example pattern
     body = modular_robots_v1.get(robot_name)
     active_hinges = body.find_modules_of_type(ActiveHinge)
-    (cpg_network_structure, output_mapping) = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
+
+    # Choose CPG structure based on coupling mode
+    if no_coupling:
+        (cpg_network_structure, output_mapping) = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
+    else:
+        (cpg_network_structure, output_mapping) = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
 
     if cpg_params is not None:
         # Use provided CPG parameters
