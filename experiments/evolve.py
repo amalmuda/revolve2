@@ -30,6 +30,18 @@ from evolution_database import (
 from contact_detection import (
     simulate_with_contact_detection,
     active_hinges_to_cpg_network_structure_internal_only,
+    active_hinges_to_cpg_network_structure_cross_leg,
+    active_hinges_to_cpg_network_structure_diagonal,
+    active_hinges_to_cpg_network_structure_full_cross_leg,
+    active_hinges_to_cpg_network_structure_fully_connected,
+    active_hinges_to_cpg_network_structure_blf,
+)
+from blf import get_blf_parameter_bounds, get_blf_symmetry_expansion_info
+from core_centric import (
+    active_hinges_to_cpg_network_structure_core_centric,
+    get_core_centric_parameter_bounds,
+    get_cc_sym_expansion_info,
+    get_cc_sym_parameter_bounds,
 )
 
 from revolve2.experimentation.database import OpenMethod, open_database_sqlite
@@ -40,16 +52,45 @@ from revolve2.modular_robot.brain.cpg import active_hinges_to_cpg_network_struct
 from revolve2.standards import modular_robots_v1
 
 
-def get_num_cpg_params(robot_name: str, no_coupling: bool = False) -> int:
+def get_num_cpg_params(robot_name: str, no_coupling: bool = False, cross_leg_coupling: bool = False, diagonal_coupling: bool = False, full_cross_leg_coupling: bool = False, fully_connected_coupling: bool = False, blf_coupling: bool = False, blf_symmetry: bool = False, core_centric_coupling: bool = False, core_centric_symmetry: bool = False) -> int:
     """Get the number of CPG parameters for a robot.
 
     Args:
         robot_name: Name of the robot.
         no_coupling: If True, return only internal params (no external coupling).
+        cross_leg_coupling: If True, return params for cross-leg coupling mode.
+        diagonal_coupling: If True, return params for diagonal coupling mode.
+        full_cross_leg_coupling: If True, return params for full cross-leg coupling mode.
+        fully_connected_coupling: If True, every hinge connected to every other hinge.
+        blf_coupling: If True, return params for BLF (Body/Limb Finder) coupling.
+        blf_symmetry: If True, use BLF-SYM (symmetric limbs share parameters).
+        core_centric_coupling: If True, use Core-Centric coupling (bio-inspired reduced network).
+        core_centric_symmetry: If True, use CC-SYM (Core-Centric with symmetry).
     """
     body = modular_robots_v1.get(robot_name)
     active_hinges = body.find_modules_of_type(ActiveHinge)
-    if no_coupling:
+    if core_centric_coupling or core_centric_symmetry:
+        cpg_network_structure, _ = active_hinges_to_cpg_network_structure_core_centric(active_hinges, body)
+        if core_centric_symmetry:
+            # Return reduced param count for CC-SYM
+            # num_unique_params already includes external weights
+            info = get_cc_sym_expansion_info(body)
+            return info["num_unique_params"]
+    elif blf_coupling:
+        cpg_network_structure, _ = active_hinges_to_cpg_network_structure_blf(active_hinges, body, use_symmetry=blf_symmetry)
+        if blf_symmetry:
+            # Return reduced param count for BLF-SYM
+            info = get_blf_symmetry_expansion_info(body)
+            return info["num_unique_params"]
+    elif fully_connected_coupling:
+        cpg_network_structure, _ = active_hinges_to_cpg_network_structure_fully_connected(active_hinges)
+    elif full_cross_leg_coupling:
+        cpg_network_structure, _ = active_hinges_to_cpg_network_structure_full_cross_leg(active_hinges, body)
+    elif diagonal_coupling:
+        cpg_network_structure, _ = active_hinges_to_cpg_network_structure_diagonal(active_hinges, body)
+    elif cross_leg_coupling:
+        cpg_network_structure, _ = active_hinges_to_cpg_network_structure_cross_leg(active_hinges, body)
+    elif no_coupling:
         cpg_network_structure, _ = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
     else:
         cpg_network_structure, _ = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
@@ -78,6 +119,14 @@ def run_evolution(
     fitness_formula: str = "exponential",
     results_dir: str = "results",
     no_coupling: bool = False,
+    cross_leg_coupling: bool = False,
+    diagonal_coupling: bool = False,
+    full_cross_leg_coupling: bool = False,
+    fully_connected_coupling: bool = False,
+    blf_coupling: bool = False,
+    blf_symmetry: bool = False,
+    core_centric_coupling: bool = False,
+    core_centric_symmetry: bool = False,
 ) -> tuple[np.ndarray, float]:
     """
     Run CMA-ES evolution to optimize CPG parameters.
@@ -146,11 +195,20 @@ def run_evolution(
     print(f"  Seed:            {seed}")
     print(f"  Friction:        {terrain_friction}")
     print(f"  No Coupling:     {no_coupling}")
+    print(f"  Cross-Leg:       {cross_leg_coupling}")
+    print(f"  Diagonal:        {diagonal_coupling}")
+    print(f"  Full Cross-Leg:  {full_cross_leg_coupling}")
+    print(f"  Fully Connected: {fully_connected_coupling}")
+    print(f"  BLF Coupling:    {blf_coupling}")
+    print(f"  BLF Symmetry:    {blf_symmetry}")
+    print(f"  Core-Centric:    {core_centric_coupling}")
+    print(f"  CC-SYM:          {core_centric_symmetry}")
     print("=" * 60 + "\n")
 
     # Get number of CPG parameters
-    num_params = get_num_cpg_params(robot_name, no_coupling=no_coupling)
-    print(f"Number of CPG parameters for {robot_name}: {num_params}" + (" (internal only)" if no_coupling else " (internal + external)"))
+    num_params = get_num_cpg_params(robot_name, no_coupling=no_coupling, cross_leg_coupling=cross_leg_coupling, diagonal_coupling=diagonal_coupling, full_cross_leg_coupling=full_cross_leg_coupling, fully_connected_coupling=fully_connected_coupling, blf_coupling=blf_coupling, blf_symmetry=blf_symmetry, core_centric_coupling=core_centric_coupling, core_centric_symmetry=core_centric_symmetry)
+    coupling_mode = "CC-SYM" if core_centric_symmetry else ("core-centric" if core_centric_coupling else ("BLF-SYM" if (blf_coupling and blf_symmetry) else ("BLF" if blf_coupling else ("fully-connected" if fully_connected_coupling else ("full-cross-leg" if full_cross_leg_coupling else ("diagonal" if diagonal_coupling else ("cross-leg" if cross_leg_coupling else ("internal only" if no_coupling else "neighbor"))))))))
+    print(f"Number of CPG parameters for {robot_name}: {num_params} ({coupling_mode})")
 
     # Initialize evaluator
     evaluator = Evaluator(
@@ -163,6 +221,15 @@ def run_evolution(
         fitness_formula=fitness_formula,
         warmup_time=config.WARMUP_TIME,
         no_coupling=no_coupling,
+        cross_leg_coupling=cross_leg_coupling,
+        diagonal_coupling=diagonal_coupling,
+        full_cross_leg_coupling=full_cross_leg_coupling,
+        fully_connected_coupling=fully_connected_coupling,
+        blf_coupling=blf_coupling,
+        blf_symmetry=blf_symmetry,
+        core_centric_coupling=core_centric_coupling or core_centric_symmetry,  # CC-SYM uses CC structure
+        core_centric_symmetry=core_centric_symmetry,
+        param_bounds=param_bounds,
     )
 
     # Setup database if enabled
@@ -225,12 +292,53 @@ def run_evolution(
 
 
     # Initialize CMA-ES
-    initial_mean = [0.0] * num_params  # Start at center of parameter space
     options = cma.CMAOptions()
-    options.set("bounds", list(param_bounds))
     options.set("seed", seed)
     if population_size:
         options.set("popsize", population_size)
+
+    # Get parameter bounds (BLF/Core-Centric use per-parameter joint-type specific bounds)
+    if core_centric_symmetry:
+        body = modular_robots_v1.get(robot_name)
+        lower_bounds, upper_bounds = get_cc_sym_parameter_bounds(
+            body,
+            external_weight_bounds=param_bounds,  # Use user-specified bounds for coupling weights
+        )
+        options.set("bounds", [lower_bounds, upper_bounds])
+        # Start at center of per-parameter bounds
+        initial_mean = [(lo + hi) / 2 for lo, hi in zip(lower_bounds, upper_bounds)]
+        print(f"Using CC-SYM per-joint amplitude bounds (paper Table I)")
+        print(f"  Reduced params: symmetric limbs share amplitude/offset")
+        print(f"  Internal weights: joint-type specific [0, π/6] to [0, 2π/3]")
+        print(f"  External weights: {param_bounds}")
+    elif core_centric_coupling:
+        body = modular_robots_v1.get(robot_name)
+        lower_bounds, upper_bounds = get_core_centric_parameter_bounds(
+            body,
+            external_weight_bounds=param_bounds,  # Use user-specified bounds for coupling weights
+        )
+        options.set("bounds", [lower_bounds, upper_bounds])
+        # Start at center of per-parameter bounds
+        initial_mean = [(lo + hi) / 2 for lo, hi in zip(lower_bounds, upper_bounds)]
+        print(f"Using Core-Centric per-joint amplitude bounds (paper Table I)")
+        print(f"  Internal weights: joint-type specific [0, π/6] to [0, 2π/3]")
+        print(f"  External weights: {param_bounds}")
+    elif blf_coupling:
+        body = modular_robots_v1.get(robot_name)
+        lower_bounds, upper_bounds = get_blf_parameter_bounds(
+            body,
+            use_symmetry=blf_symmetry,
+            external_weight_bounds=param_bounds,  # Use user-specified bounds for coupling weights
+        )
+        options.set("bounds", [lower_bounds, upper_bounds])
+        # Start at center of per-parameter bounds
+        initial_mean = [(lo + hi) / 2 for lo, hi in zip(lower_bounds, upper_bounds)]
+        print(f"Using BLF per-joint amplitude bounds (paper Table I)")
+        print(f"  Internal weights: joint-type specific [0, π/6] to [0, 2π/3]")
+        print(f"  External weights: {param_bounds}")
+    else:
+        options.set("bounds", list(param_bounds))
+        initial_mean = [0.0] * num_params  # Start at center of parameter space
 
     opt = cma.CMAEvolutionStrategy(initial_mean, initial_std, options)
 
@@ -335,14 +443,26 @@ def run_evolution(
     # Visualize best robot if requested
     if visualize_best and best_params is not None:
         print("\nVisualizing best robot...")
+        # For CC-SYM, we need to expand the params before visualization
+        vis_params = best_params.tolist()
+        if core_centric_symmetry:
+            from core_centric import expand_cc_sym_params
+            body = modular_robots_v1.get(robot_name)
+            vis_params = expand_cc_sym_params(vis_params, body, external_weight_bounds=param_bounds)
         simulate_with_contact_detection(
             robot_name=robot_name,
             simulation_time=simulation_time,
             verbose=True,
-            cpg_params=best_params.tolist(),
+            cpg_params=vis_params,
             headless=False,
             warmup_time=config.WARMUP_TIME,
             no_coupling=no_coupling,
+            cross_leg_coupling=cross_leg_coupling,
+            diagonal_coupling=diagonal_coupling,
+            full_cross_leg_coupling=full_cross_leg_coupling,
+            blf_coupling=blf_coupling,
+            blf_symmetry=blf_symmetry,
+            core_centric_coupling=core_centric_coupling or core_centric_symmetry,
         )
 
     return best_params, best_fitness
@@ -381,6 +501,22 @@ def main():
     # CPG structure
     parser.add_argument("--no-coupling", action="store_true",
                         help="Use only internal CPG weights (no external coupling between hinges)")
+    parser.add_argument("--cross-leg-coupling", action="store_true",
+                        help="Use cross-leg coupling (neighbor + shoulder-to-shoulder connections)")
+    parser.add_argument("--diagonal-coupling", action="store_true",
+                        help="Use diagonal coupling (neighbor + true diagonal leg connections)")
+    parser.add_argument("--full-cross-leg-coupling", action="store_true",
+                        help="Use full cross-leg coupling (complete graph among all 4 actual leg hinges)")
+    parser.add_argument("--fully-connected", action="store_true",
+                        help="Use fully connected coupling (every hinge to every hinge, 36 params for spider)")
+    parser.add_argument("--blf-coupling", action="store_true",
+                        help="Use BLF (Body/Limb Finder) coupling from EPFL paper")
+    parser.add_argument("--blf-symmetry", action="store_true",
+                        help="Use BLF-SYM (symmetric limbs share parameters)")
+    parser.add_argument("--core-centric", action="store_true",
+                        help="Use Core-Centric coupling (bio-inspired reduced network)")
+    parser.add_argument("--core-centric-sym", action="store_true",
+                        help="Use CC-SYM (Core-Centric + symmetry, reduced params)")
 
     # Other
     parser.add_argument("--seed", type=int, help="Random seed")
@@ -431,6 +567,22 @@ def main():
         kwargs["results_dir"] = args.results_dir
     if args.no_coupling:
         kwargs["no_coupling"] = True
+    if args.cross_leg_coupling:
+        kwargs["cross_leg_coupling"] = True
+    if args.diagonal_coupling:
+        kwargs["diagonal_coupling"] = True
+    if args.full_cross_leg_coupling:
+        kwargs["full_cross_leg_coupling"] = True
+    if args.fully_connected:
+        kwargs["fully_connected_coupling"] = True
+    if args.blf_coupling:
+        kwargs["blf_coupling"] = True
+    if args.blf_symmetry:
+        kwargs["blf_symmetry"] = True
+    if args.core_centric:
+        kwargs["core_centric_coupling"] = True
+    if args.core_centric_sym:
+        kwargs["core_centric_symmetry"] = True
 
     run_evolution(**kwargs)
 
