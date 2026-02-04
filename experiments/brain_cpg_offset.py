@@ -160,3 +160,133 @@ def get_bounds_with_offset(cpg_network_structure: CpgNetworkStructure, num_hinge
     upper.extend([0.5] * num_hinges)
 
     return lower, upper
+
+
+# =============================================================================
+# CPG with Amplitude Control
+# =============================================================================
+
+class BrainCpgInstanceWithAmplitude(BrainInstance):
+    """
+    CPG network brain with per-joint amplitude control.
+
+    Output = cpg_state × amplitude × hinge_range
+
+    This allows evolution to control oscillation magnitude per joint,
+    similar to what parametric sine controllers can do.
+    """
+
+    def __init__(
+        self,
+        initial_state: npt.NDArray[np.float_],
+        weight_matrix: npt.NDArray[np.float_],
+        output_mapping: list[tuple[int, ActiveHinge]],
+        amplitudes: npt.NDArray[np.float_],
+    ) -> None:
+        assert initial_state.ndim == 1
+        assert weight_matrix.ndim == 2
+        assert weight_matrix.shape[0] == weight_matrix.shape[1]
+        assert initial_state.shape[0] == weight_matrix.shape[0]
+        assert all([i >= 0 and i < len(initial_state) for i, _ in output_mapping])
+        assert len(amplitudes) == len(output_mapping)
+
+        self._state = initial_state.copy()
+        self._weight_matrix = weight_matrix
+        self._output_mapping = output_mapping
+        self._amplitudes = amplitudes
+
+    @staticmethod
+    def _rk45(
+        state: npt.NDArray[np.float_], A: npt.NDArray[np.float_], dt: float
+    ) -> npt.NDArray[np.float_]:
+        """RK4 integration."""
+        A1 = np.matmul(A, state)
+        A2 = np.matmul(A, (state + dt / 2 * A1))
+        A3 = np.matmul(A, (state + dt / 2 * A2))
+        A4 = np.matmul(A, (state + dt * A3))
+        state = state + dt / 6 * (A1 + 2 * (A2 + A3) + A4)
+        return np.clip(state, a_min=-1, a_max=1)
+
+    def control(
+        self,
+        dt: float,
+        sensor_state: ModularRobotSensorState,
+        control_interface: ModularRobotControlInterface,
+    ) -> None:
+        # Integrate ODE
+        self._state = self._rk45(self._state, self._weight_matrix, dt)
+
+        # Apply output with amplitude scaling
+        for idx, (state_index, active_hinge) in enumerate(self._output_mapping):
+            cpg_output = float(self._state[state_index])
+            amplitude = float(self._amplitudes[idx])
+            # Scale by amplitude, then by hinge range
+            output = cpg_output * amplitude * active_hinge.range
+            control_interface.set_active_hinge_target(active_hinge, output)
+
+
+class BrainCpgNetworkStaticWithAmplitude(Brain):
+    """
+    CPG brain with per-joint amplitude parameters.
+
+    Parameters: [internal_weights..., external_weights..., amplitudes...]
+
+    This gives Revolve2 CPG the same per-joint amplitude control that
+    parametric sine controllers have, which may help reduce dragging.
+    """
+
+    def __init__(
+        self,
+        initial_state: npt.NDArray[np.float_],
+        weight_matrix: npt.NDArray[np.float_],
+        output_mapping: list[tuple[int, ActiveHinge]],
+        amplitudes: npt.NDArray[np.float_],
+    ) -> None:
+        self._initial_state = initial_state
+        self._weight_matrix = weight_matrix
+        self._output_mapping = output_mapping
+        self._amplitudes = amplitudes
+
+    @classmethod
+    def uniform_from_params(
+        cls,
+        params: npt.NDArray[np.float_],
+        cpg_network_structure: CpgNetworkStructure,
+        initial_state_uniform: float,
+        output_mapping: list[tuple[int, ActiveHinge]],
+    ) -> "BrainCpgNetworkStaticWithAmplitude":
+        """
+        Create brain from parameters.
+
+        params layout: [cpg_weights..., amplitudes...]
+        - cpg_weights: num_connections parameters for the weight matrix
+        - amplitudes: num_outputs parameters for per-joint amplitudes [0, 1]
+        """
+        num_cpg_params = cpg_network_structure.num_connections
+        num_outputs = len(output_mapping)
+
+        assert len(params) == num_cpg_params + num_outputs, \
+            f"Expected {num_cpg_params + num_outputs} params, got {len(params)}"
+
+        cpg_params = params[:num_cpg_params]
+        amplitudes = params[num_cpg_params:]
+
+        initial_state = cpg_network_structure.make_uniform_state(initial_state_uniform)
+        weight_matrix = cpg_network_structure.make_connection_weights_matrix_from_params(
+            list(cpg_params)
+        )
+
+        return cls(
+            initial_state=initial_state,
+            weight_matrix=weight_matrix,
+            output_mapping=output_mapping,
+            amplitudes=np.array(amplitudes),
+        )
+
+    def make_instance(self) -> BrainInstance:
+        return BrainCpgInstanceWithAmplitude(
+            initial_state=self._initial_state,
+            weight_matrix=self._weight_matrix,
+            output_mapping=self._output_mapping,
+            amplitudes=self._amplitudes,
+        )
