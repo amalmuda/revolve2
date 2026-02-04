@@ -369,7 +369,8 @@ def evaluate_sine(
         body = get_body(robot_name)
 
         # Create brain based on coupling mode
-        if coupling == "uncoupled":
+        if coupling in ("uncoupled", "uncoupled_bounded"):
+            # uncoupled_bounded uses BLF amplitude bounds but no coupling
             brain = BrainSine.from_parameters(body, params, frequency=frequency)
         elif coupling in ("blf", "blf_bounded"):
             # Both blf and blf_bounded use BLF coupling, difference is in amplitude bounds
@@ -435,8 +436,8 @@ def get_bounds(controller: str, n_params: int, n_hinges: int,
     """
     if controller == "sine":
         # Check if we should use BLF-based bounds (paper bounds)
-        # Only blf_bounded gets paper bounds; blf uses uniform bounds
-        if coupling == "blf_bounded" and robot_name is not None and use_paper_bounds:
+        # blf_bounded and uncoupled_bounded get paper bounds; blf/uncoupled use uniform bounds
+        if coupling in ("blf_bounded", "uncoupled_bounded") and robot_name is not None and use_paper_bounds:
             # Use BLF analysis to get joint-specific amplitude bounds
             body = get_body(robot_name)
             blf_result = analyze_body(body)
@@ -725,8 +726,8 @@ def main():
                         choices=["ode_cpg", "sine"],
                         help="Controller type")
     parser.add_argument("--coupling", type=str, required=True,
-                        choices=["uncoupled", "neighbor", "blf", "blf_bounded"],
-                        help="Coupling mode (blf_bounded uses paper amplitude bounds)")
+                        choices=["uncoupled", "neighbor", "blf", "blf_bounded", "uncoupled_bounded"],
+                        help="Coupling mode (blf_bounded/uncoupled_bounded use paper amplitude bounds)")
     parser.add_argument("--lambda", dest="lambda_penalty", type=float, required=True,
                         help="Contact penalty lambda (0=no penalty, 1=penalty)")
     parser.add_argument("--penalty-type", type=str, default="dragging",
