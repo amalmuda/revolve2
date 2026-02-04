@@ -244,18 +244,26 @@ class CoreCentricAnalyzer:
         """
         Count how many ActiveHinges are directly connected to a module.
 
-        "Directly connected" means the Hinge is an immediate CHILD of the module.
-        Parent hinges are NOT counted per the specification.
+        "Directly connected" means:
+        - Immediate children that are ActiveHinges
+        - The parent if it's an ActiveHinge
+
+        According to BLF rules: "Any brick with 3+ hinges connected → also body"
+        This includes connections in ALL directions (parent + children).
 
         :param module: The module to check.
-        :returns: Number of directly connected hinge children.
+        :returns: Number of directly connected hinges (children + parent).
         """
         count = 0
 
-        # Only check children (NOT parent)
+        # Count child hinges
         for child in module.children.values():
             if isinstance(child, ActiveHinge):
                 count += 1
+
+        # Count parent hinge (if parent is a hinge)
+        if module.parent is not None and isinstance(module.parent, ActiveHinge):
+            count += 1
 
         return count
 

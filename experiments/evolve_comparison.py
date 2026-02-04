@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from brain_sine import BrainSine, get_num_sine_params
 from brain_sine_coupled import BrainCoupledSine
 from brain_cpg_blf import brain_coupled_sine_blf_from_parameters
-from blf_analyzer import analyze_body
+from blf_analyzer import analyze_body, JointType
 
 # Import Revolve2 CPG
 from revolve2.modular_robot import ModularRobot
@@ -86,6 +86,8 @@ class EvaluationResult:
     fitness: float
     final_x: float
     final_y: float
+    avg_core_height: float = 0.0  # Average core body height during simulation
+    min_core_height: float = 0.0  # Minimum core body height during simulation
 
 
 def get_body(robot_name: str):
@@ -191,6 +193,9 @@ def simulate_with_metrics(
     # Record initial position
     initial_pos = data.xpos[core_body_id].copy()
 
+    # Track core heights for height penalty
+    core_heights = []
+
     while data.time < simulation_time:
         contact_tracker.total_timesteps += 1
 
@@ -205,6 +210,10 @@ def simulate_with_metrics(
 
         if has_body_contact:
             contact_tracker.timesteps_with_non_foot_contact += 1
+
+        # Track core body height (z-coordinate)
+        core_height = data.xpos[core_body_id][2]
+        core_heights.append(core_height)
 
         # Track energy
         energy = calculate_actuator_energy(model, data, batch_params.simulation_timestep)
@@ -242,6 +251,14 @@ def simulate_with_metrics(
     else:
         cot = float('inf')
 
+    # Core height statistics
+    if core_heights:
+        avg_core_height = float(np.mean(core_heights))
+        min_core_height = float(np.min(core_heights))
+    else:
+        avg_core_height = 0.0
+        min_core_height = 0.0
+
     return EvaluationResult(
         distance=distance,
         dragging=dragging,
@@ -249,7 +266,44 @@ def simulate_with_metrics(
         fitness=0.0,  # Calculated later with lambda
         final_x=float(final_pos[0]),
         final_y=float(final_pos[1]),
+        avg_core_height=avg_core_height,
+        min_core_height=min_core_height,
     )
+
+
+def calculate_fitness(
+    result: EvaluationResult,
+    lambda_penalty: float,
+    penalty_type: str = "dragging",
+) -> float:
+    """
+    Calculate fitness based on penalty type.
+
+    Penalty types:
+    - "dragging": fitness = distance * (1 - dragging)^lambda
+    - "height": fitness = distance * avg_core_height^lambda (rewards keeping body up)
+    - "min_height": fitness = distance * min_core_height^lambda (penalizes any sag)
+    - "combined": fitness = distance * (1 - dragging)^lambda * avg_core_height
+    """
+    if penalty_type == "dragging":
+        return result.distance * math.pow(1 - result.dragging, lambda_penalty)
+    elif penalty_type == "height":
+        # Use normalized height (typically 0.05-0.15m for these robots)
+        # Scale to make it comparable to dragging penalty
+        height_factor = max(0.0, result.avg_core_height * 10)  # Scale up
+        return result.distance * math.pow(height_factor, lambda_penalty)
+    elif penalty_type == "min_height":
+        # Penalize based on minimum height (more strict)
+        height_factor = max(0.0, result.min_core_height * 10)
+        return result.distance * math.pow(height_factor, lambda_penalty)
+    elif penalty_type == "combined":
+        # Combine dragging penalty with height reward
+        dragging_factor = math.pow(1 - result.dragging, lambda_penalty)
+        height_factor = max(0.01, result.avg_core_height * 10)
+        return result.distance * dragging_factor * height_factor
+    else:
+        # Default to dragging
+        return result.distance * math.pow(1 - result.dragging, lambda_penalty)
 
 
 def evaluate_ode_cpg(
@@ -258,6 +312,7 @@ def evaluate_ode_cpg(
     coupling: str,
     simulation_time: float,
     lambda_penalty: float,
+    penalty_type: str = "dragging",
 ) -> EvaluationResult:
     """Evaluate ODE CPG controller with full contact detection."""
     try:
@@ -290,7 +345,7 @@ def evaluate_ode_cpg(
         result = simulate_with_metrics(robot, simulation_time, batch_params)
 
         # Calculate fitness with penalty
-        result.fitness = result.distance * math.pow(1 - result.dragging, lambda_penalty)
+        result.fitness = calculate_fitness(result, lambda_penalty, penalty_type)
 
         return result
 
@@ -305,7 +360,8 @@ def evaluate_sine(
     coupling: str,
     simulation_time: float,
     lambda_penalty: float,
-    frequency: float = 1.0,
+    penalty_type: str = "dragging",
+    frequency: float = 0.2,  # Bonardi et al. uses 0.2 Hz
     coupling_strength: float = 0.5,
 ) -> EvaluationResult:
     """Evaluate Sine CPG controller with full contact detection."""
@@ -334,7 +390,7 @@ def evaluate_sine(
         result = simulate_with_metrics(robot, simulation_time, batch_params)
 
         # Calculate fitness with penalty
-        result.fitness = result.distance * math.pow(1 - result.dragging, lambda_penalty)
+        result.fitness = calculate_fitness(result, lambda_penalty, penalty_type)
 
         return result
 
@@ -362,28 +418,79 @@ def get_num_params(robot_name: str, controller: str, coupling: str) -> int:
         return cpg_structure.num_connections
 
 
-def get_bounds(controller: str, n_params: int, n_hinges: int):
-    """Get parameter bounds."""
+def get_bounds(controller: str, n_params: int, n_hinges: int,
+               robot_name: str = None, coupling: str = None, use_paper_bounds: bool = True):
+    """Get parameter bounds.
+
+    For sine + blf with use_paper_bounds=True, uses Bonardi et al. amplitude bounds:
+    - Spine: [0, 2π/3] (~120°)
+    - Hip: [0, π/2] (~90°)
+    - Knee: [0, π/6] (~30°)
+    - Ankle: [0, π/6] (~30°)
+    """
     if controller == "sine":
-        # [amp, phase, offset] per hinge
-        lower = []
-        upper = []
-        for _ in range(n_hinges):
-            lower.extend([0.0, -math.pi, -0.5])  # amp, phase, offset
-            upper.extend([1.0, math.pi, 0.5])
-        return lower, upper
+        # Check if we should use BLF-based bounds (paper bounds)
+        if coupling == "blf" and robot_name is not None and use_paper_bounds:
+            # Use BLF analysis to get joint-specific amplitude bounds
+            body = get_body(robot_name)
+            blf_result = analyze_body(body)
+            active_hinges = body.find_modules_of_type(ActiveHinge)
+
+            # Bonardi et al. Table I amplitude bounds
+            AMP_SPINE = 2.0 * math.pi / 3.0  # 2π/3 ≈ 2.094 rad (120°)
+            AMP_HIP = math.pi / 2.0          # π/2 ≈ 1.571 rad (90°)
+            AMP_KNEE = math.pi / 6.0         # π/6 ≈ 0.524 rad (30°)
+            AMP_ANKLE = math.pi / 6.0        # π/6 ≈ 0.524 rad (30°)
+            AMP_DEFAULT = 1.0                # Default for unclassified
+
+            # Build bounds per hinge based on BLF classification
+            lower = []
+            upper = []
+
+            # Create a mapping from hinge index to joint type
+            joint_type_map = {}
+            for joint_info in blf_result.joints:
+                joint_type_map[joint_info.index] = joint_info.joint_type
+
+            for i in range(n_hinges):
+                joint_type = joint_type_map.get(i, JointType.UNCLASSIFIED)
+
+                if joint_type == JointType.SPINE:
+                    amp_max = AMP_SPINE
+                elif joint_type == JointType.HIP:
+                    amp_max = AMP_HIP
+                elif joint_type == JointType.KNEE:
+                    amp_max = AMP_KNEE
+                elif joint_type == JointType.ANKLE:
+                    amp_max = AMP_ANKLE
+                else:
+                    amp_max = AMP_DEFAULT
+
+                # [amp, phase, offset] per hinge
+                lower.extend([0.0, -math.pi, -0.5])
+                upper.extend([amp_max, math.pi, 0.5])
+
+            return lower, upper
+        else:
+            # Standard uniform bounds: [amp, phase, offset] per hinge
+            lower = []
+            upper = []
+            for _ in range(n_hinges):
+                lower.extend([0.0, -math.pi, -0.5])  # amp, phase, offset
+                upper.extend([1.0, math.pi, 0.5])
+            return lower, upper
     else:  # ode_cpg
         return [-1.0] * n_params, [1.0] * n_params
 
 
 def _eval_wrapper(args):
     """Wrapper for parallel evaluation."""
-    idx, params, robot_name, controller, coupling, sim_time, lambda_penalty = args
+    idx, params, robot_name, controller, coupling, sim_time, lambda_penalty, penalty_type = args
 
     if controller == "sine":
-        result = evaluate_sine(params, robot_name, coupling, sim_time, lambda_penalty)
+        result = evaluate_sine(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
     else:
-        result = evaluate_ode_cpg(params, robot_name, coupling, sim_time, lambda_penalty)
+        result = evaluate_ode_cpg(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
 
     return idx, result
 
@@ -393,6 +500,7 @@ def run_evolution(
     controller: str,
     coupling: str,
     lambda_penalty: float,
+    penalty_type: str = "dragging",
     simulation_time: float = 30.0,
     num_generations: int = 300,
     population_size: int = 25,
@@ -411,10 +519,11 @@ def run_evolution(
     active_hinges = body.find_modules_of_type(ActiveHinge)
     n_hinges = len(active_hinges)
     n_params = get_num_params(robot_name, controller, coupling)
-    lower_bounds, upper_bounds = get_bounds(controller, n_params, n_hinges)
+    lower_bounds, upper_bounds = get_bounds(controller, n_params, n_hinges,
+                                            robot_name=robot_name, coupling=coupling)
 
     # Create results directory
-    experiment_name = f"{robot_name}_{controller}_{coupling}_lambda{int(lambda_penalty)}"
+    experiment_name = f"{robot_name}_{controller}_{coupling}_lambda{int(lambda_penalty)}_{penalty_type}"
     experiment_dir = f"{results_dir}/{experiment_name}"
     os.makedirs(experiment_dir, exist_ok=True)
 
@@ -428,6 +537,7 @@ def run_evolution(
     print(f"  Controller:     {controller}")
     print(f"  Coupling:       {coupling}")
     print(f"  Lambda:         {lambda_penalty}")
+    print(f"  Penalty Type:   {penalty_type}")
     print(f"  Parameters:     {n_params}")
     print(f"  Sim Time:       {simulation_time}s")
     print(f"  Generations:    {num_generations}")
@@ -457,7 +567,8 @@ def run_evolution(
         param_bounds_max=upper_bounds[0],
         rng_seed=seed,
         run_number=run_num,
-        frequency=1.0 if controller == "sine" else None,
+        penalty_type=penalty_type,
+        frequency=0.2 if controller == "sine" else None,  # Bonardi et al. uses 0.2 Hz
         coupling_strength=0.5 if controller == "sine" and coupling != "uncoupled" else None,
         num_parameters=n_params,
         num_hinges=n_hinges,
@@ -495,7 +606,7 @@ def run_evolution(
         results = [None] * len(solutions)
         args_list = [
             (i, np.array(params), robot_name, controller, coupling,
-             simulation_time, lambda_penalty)
+             simulation_time, lambda_penalty, penalty_type)
             for i, params in enumerate(solutions)
         ]
 
@@ -515,6 +626,7 @@ def run_evolution(
         distances = [r.distance for r in results]
         draggings = [r.dragging for r in results]
         cots = [r.cot for r in results]
+        heights = [r.avg_core_height for r in results]
 
         # Tell CMA-ES
         opt.tell(solutions, [-f for f in fitnesses])
@@ -541,6 +653,8 @@ def run_evolution(
                     cost_of_transport=float(r.cot) if r.cot != float('inf') else None,
                     final_x=float(r.final_x),
                     final_y=float(r.final_y),
+                    avg_core_height=float(r.avg_core_height),
+                    min_core_height=float(r.min_core_height),
                 )
                 for i, (params, fitness, r) in enumerate(zip(solutions, fitnesses, results))
             ]
@@ -558,6 +672,7 @@ def run_evolution(
             distance_max=float(np.max(distances)),
             dragging_mean=float(np.mean(draggings)),
             cot_mean=float(np.mean([c for c in cots if c != float('inf')])) if any(c != float('inf') for c in cots) else None,
+            height_mean=float(np.mean(heights)),
             best_ever_fitness=best_fitness,
             best_ever_distance=best_distance,
             time_seconds=gen_time,
@@ -606,6 +721,12 @@ def main():
                         help="Coupling mode")
     parser.add_argument("--lambda", dest="lambda_penalty", type=float, required=True,
                         help="Contact penalty lambda (0=no penalty, 1=penalty)")
+    parser.add_argument("--penalty-type", type=str, default="dragging",
+                        choices=["dragging", "height", "min_height", "combined"],
+                        help="Penalty type: dragging (penalize non-foot contact), "
+                             "height (reward avg core height), "
+                             "min_height (reward min core height), "
+                             "combined (both dragging + height)")
 
     parser.add_argument("--sim-time", type=float, default=30.0,
                         help="Simulation time in seconds (default: 30)")
@@ -629,6 +750,7 @@ def main():
         controller=args.controller,
         coupling=args.coupling,
         lambda_penalty=args.lambda_penalty,
+        penalty_type=args.penalty_type,
         simulation_time=args.sim_time,
         num_generations=args.generations,
         population_size=args.population,

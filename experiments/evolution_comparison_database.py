@@ -56,6 +56,9 @@ class ComparisonExperiment(Base, HasId):
     # Run number (for multiple seeds)
     run_number: orm.Mapped[int] = orm.mapped_column(nullable=False, default=1)
 
+    # Penalty type: "dragging", "height", "min_height", "combined"
+    penalty_type: orm.Mapped[str | None] = orm.mapped_column(nullable=True, default="dragging")
+
     # Controller-specific settings
     frequency: orm.Mapped[float | None] = orm.mapped_column(nullable=True, default=1.0)
     coupling_strength: orm.Mapped[float | None] = orm.mapped_column(nullable=True, default=0.5)
@@ -129,6 +132,10 @@ class ComparisonIndividual(Base, HasId):
     final_x: orm.Mapped[float | None] = orm.mapped_column(nullable=True, default=None)
     final_y: orm.Mapped[float | None] = orm.mapped_column(nullable=True, default=None)
 
+    # Core height metrics
+    avg_core_height: orm.Mapped[float | None] = orm.mapped_column(nullable=True, default=None)
+    min_core_height: orm.Mapped[float | None] = orm.mapped_column(nullable=True, default=None)
+
 
 @dataclass
 class ComparisonPopulation(Base, HasId):
@@ -178,6 +185,9 @@ class ComparisonGeneration(Base, HasId):
 
     # CoT statistics
     cot_mean: orm.Mapped[float | None] = orm.mapped_column(nullable=True, default=None)
+
+    # Core height statistics
+    height_mean: orm.Mapped[float | None] = orm.mapped_column(nullable=True, default=None)
 
     # Best ever (cumulative)
     best_ever_fitness: orm.Mapped[float | None] = orm.mapped_column(nullable=True, default=None)

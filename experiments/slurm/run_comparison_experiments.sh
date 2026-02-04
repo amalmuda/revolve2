@@ -29,8 +29,8 @@
 #   - Workers: 25
 # ============================================
 
-# Configuration arrays
-ROBOTS=("spider" "gecko")
+# Configuration arrays (gecko first to prioritize re-running BLF experiments)
+ROBOTS=("gecko" "spider")
 CONTROLLERS=("ode_cpg" "sine")
 COUPLINGS=("uncoupled" "neighbor" "blf")
 LAMBDAS=(0 1)
@@ -42,8 +42,8 @@ GENERATIONS=300
 POPULATION=25
 WORKERS=25
 
-# Results directory
-RESULTS_DIR="results/comparison"
+# Results directory (v2: fixed BLF, 0.2Hz, paper amplitude bounds)
+RESULTS_DIR="results/comparison_v2"
 
 # Calculate indices from task ID (1-based)
 # Layout: seeds x lambdas x couplings x controllers x robots
