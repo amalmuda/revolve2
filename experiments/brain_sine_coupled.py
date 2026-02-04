@@ -1,17 +1,26 @@
 """
-Coupled Sinusoidal Brain Controller with Offset.
+Coupled Sinusoidal Brain Controller with Kuramoto-style coupling.
 
 Enhanced sine controller with:
 1. Position offset (bias) - center position for oscillation
-2. Coupling - joints influence each other's phase
+2. Kuramoto coupling - oscillators synchronize based on phase differences
 3. Amplitude, frequency, phase as before
 
-Equation for each joint i:
-    position_i(t) = offset_i + amplitude_i × sin(2π × freq × t + phase_i + coupling_term)
+Phase dynamics (Kuramoto model):
+    dθ_i/dt = ω_i + K × Σ_j w_ij × sin(θ_j - θ_i)
 
-Where coupling_term = Σ(w_ij × sin(θ_j)) for neighbor joints j
+Where:
+    - ω_i = 2π × frequency (natural angular frequency)
+    - K = coupling_strength (global coupling strength)
+    - w_ij = coupling weight from oscillator j to i
 
-This is a middle ground between pure sine and full CPG.
+Output for each joint i:
+    position_i(t) = offset_i + amplitude_i × sin(θ_i(t))
+
+The coupling causes oscillators to synchronize over time:
+- K > 0: oscillators tend to synchronize (pull phases together)
+- Higher K = faster synchronization
+- Coupling topology (w_ij) determines which oscillators influence each other
 """
 
 import math
@@ -43,7 +52,8 @@ class BrainCoupledSineInstance(BrainInstance):
     """
     Stateful instance of the coupled sine brain.
 
-    Implements coupling between neighboring joints.
+    Implements Kuramoto-style differential coupling between joints.
+    Phase evolves according to: dθ/dt = ω + K × Σ w_ij × sin(θ_j - θ_i)
     """
 
     def __init__(
@@ -59,7 +69,7 @@ class BrainCoupledSineInstance(BrainInstance):
         :param active_hinges: List of active hinges to control.
         :param parameters: Sine parameters for each hinge.
         :param coupling_weights: NxN coupling weight matrix (None = auto from topology).
-        :param coupling_strength: Global coupling strength multiplier.
+        :param coupling_strength: Global coupling strength multiplier (K in Kuramoto model).
         """
         assert len(active_hinges) == len(parameters)
 
@@ -69,8 +79,11 @@ class BrainCoupledSineInstance(BrainInstance):
         self._time = 0.0
         self._n = len(active_hinges)
 
-        # Previous phase values for coupling
-        self._phases = np.zeros(self._n)
+        # Phase state - initialized with phase offsets, then evolves via differential equation
+        self._phases = np.array([p.phase_offset for p in parameters])
+
+        # Natural frequencies (ω = 2π × freq)
+        self._omegas = np.array([2.0 * math.pi * p.frequency for p in parameters])
 
         # Build coupling matrix from robot topology if not provided
         if coupling_weights is None:
@@ -109,24 +122,29 @@ class BrainCoupledSineInstance(BrainInstance):
         control_interface: ModularRobotControlInterface,
     ) -> None:
         """
-        Control the robot for one timestep with coupled oscillations.
+        Control the robot for one timestep with Kuramoto-style coupled oscillations.
+
+        Phase evolves according to: dθ_i/dt = ω_i + K × Σ_j w_ij × sin(θ_j - θ_i)
+        This causes oscillators to synchronize over time based on coupling topology.
         """
         self._time += dt
 
-        # Calculate base phases for all oscillators
-        base_phases = np.zeros(self._n)
-        for i, params in enumerate(self._parameters):
-            base_phases[i] = 2.0 * math.pi * params.frequency * self._time + params.phase_offset
+        # Calculate Kuramoto coupling term for each oscillator
+        # coupling_i = Σ_j w_ij × sin(θ_j - θ_i)
+        coupling_terms = np.zeros(self._n)
+        for i in range(self._n):
+            for j in range(self._n):
+                if self._coupling_weights[i, j] > 0:
+                    coupling_terms[i] += self._coupling_weights[i, j] * math.sin(
+                        self._phases[j] - self._phases[i]
+                    )
 
-        # Calculate coupling influence from previous state
-        coupling_influence = self._coupling_strength * self._coupling_weights @ np.sin(self._phases)
-
-        # Update phases with coupling
-        self._phases = base_phases + coupling_influence
+        # Integrate phase: θ_i(t+dt) = θ_i(t) + dt × (ω_i + K × coupling_i)
+        self._phases += dt * (self._omegas + self._coupling_strength * coupling_terms)
 
         # Calculate and apply joint positions
         for i, (hinge, params) in enumerate(zip(self._active_hinges, self._parameters)):
-            # position = offset + amplitude * sin(phase + coupling)
+            # position = offset + amplitude * sin(phase)
             target = params.position_offset + params.amplitude * math.sin(self._phases[i])
 
             # Clamp to joint range

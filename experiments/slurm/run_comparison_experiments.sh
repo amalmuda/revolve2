@@ -53,8 +53,8 @@ GENERATIONS=300
 POPULATION=25
 WORKERS=25
 
-# Results directory (v2: fixed BLF detection, 0.2Hz, paper amplitude bounds)
-RESULTS_DIR="results/comparison_v2"
+# Results directory (v3: fixed Kuramoto coupling, proper amplitude bounds, nearest-spine hip coupling)
+RESULTS_DIR="results/comparison_v3"
 
 # Job counts per robot
 CPG_JOBS_PER_ROBOT=$((3 * 2 * NUM_SEEDS))   # 3 couplings × 2 lambdas × 10 seeds = 60

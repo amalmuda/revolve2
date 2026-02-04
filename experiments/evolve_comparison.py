@@ -423,11 +423,13 @@ def get_bounds(controller: str, n_params: int, n_hinges: int,
                robot_name: str = None, coupling: str = None, use_paper_bounds: bool = True):
     """Get parameter bounds.
 
-    For sine + blf_bounded, uses Bonardi et al. amplitude bounds:
-    - Spine: [0, 2π/3] (~120°)
-    - Hip: [0, π/2] (~90°)
-    - Knee: [0, π/6] (~30°)
-    - Ankle: [0, π/6] (~30°)
+    For sine + blf_bounded, uses bioinspired amplitude bounds scaled for Revolve2:
+    - Spine: [0, 1.0] rad - full range for body undulation
+    - Hip: [0, 0.75] rad - large range for leg swing
+    - Knee: [0, 0.25] rad - restricted for distal precision
+    - Ankle: [0, 0.25] rad - restricted for distal precision
+
+    (Revolve2 V2 hinge physical limit: ±1.047 rad)
 
     For sine + blf (and others), uses uniform [0, 1] bounds.
     """
@@ -440,12 +442,14 @@ def get_bounds(controller: str, n_params: int, n_hinges: int,
             blf_result = analyze_body(body)
             active_hinges = body.find_modules_of_type(ActiveHinge)
 
-            # Bonardi et al. Table I amplitude bounds
-            AMP_SPINE = 2.0 * math.pi / 3.0  # 2π/3 ≈ 2.094 rad (120°)
-            AMP_HIP = math.pi / 2.0          # π/2 ≈ 1.571 rad (90°)
-            AMP_KNEE = math.pi / 6.0         # π/6 ≈ 0.524 rad (30°)
-            AMP_ANKLE = math.pi / 6.0        # π/6 ≈ 0.524 rad (30°)
-            AMP_DEFAULT = 1.0                # Default for unclassified
+            # Bioinspired amplitude bounds scaled for Revolve2 V2 hinges
+            # (Physical limit: ±1.047 rad, so max amplitude ~1.0 rad)
+            # Maintains Bonardi et al. proportions: spine > hip > knee/ankle
+            AMP_SPINE = 1.0    # Full range for body undulation
+            AMP_HIP = 0.75     # Large range for leg swing
+            AMP_KNEE = 0.25    # Restricted for distal precision
+            AMP_ANKLE = 0.25   # Restricted for distal precision
+            AMP_DEFAULT = 1.0  # Default for unclassified
 
             # Build bounds per hinge based on BLF classification
             lower = []

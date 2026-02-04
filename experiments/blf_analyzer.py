@@ -377,8 +377,48 @@ class BodyLimbFinder:
 
         return limb_hinges
 
+    def _get_graph_distance(self, hinge1: ActiveHinge, hinge2: ActiveHinge) -> int:
+        """Calculate the graph distance between two hinges.
+
+        Distance is the number of modules (edges) between them in the module tree.
+        Uses BFS to find shortest path.
+        """
+        if hinge1 == hinge2:
+            return 0
+
+        # BFS from hinge1 to hinge2
+        from collections import deque
+
+        visited = set()
+        queue = deque([(hinge1, 0)])  # (module, distance)
+        visited.add(id(hinge1))
+
+        while queue:
+            current, dist = queue.popleft()
+
+            # Get all neighbors (parent and children)
+            neighbors = []
+            if current.parent is not None:
+                neighbors.append(current.parent)
+            for child in current.children.values():
+                if child is not None:
+                    neighbors.append(child)
+
+            for neighbor in neighbors:
+                if id(neighbor) in visited:
+                    continue
+
+                if neighbor == hinge2:
+                    return dist + 1
+
+                visited.add(id(neighbor))
+                queue.append((neighbor, dist + 1))
+
+        # Should not happen in a connected tree
+        return float('inf')
+
     def _generate_coupling_matrix(self) -> np.ndarray:
-        """Generate coupling matrix based on BLF rules."""
+        """Generate coupling matrix based on BLF rules (Bonardi et al.)."""
         n = len(self._hinges)
         coupling = np.zeros((n, n), dtype=float)
 
@@ -401,14 +441,27 @@ class BodyLimbFinder:
                     coupling[i, j] = 1.0
 
         # Rule 3: Hip → nearest Spine: coupled (if spine exists)
+        # Per Bonardi et al.: "coupled to the closest spine oscillator in the structure"
         if spine_indices:
             for hip_joint in self._joint_infos:
                 if hip_joint.joint_type == JointType.HIP:
-                    # Find nearest spine (for now, couple to all spines)
-                    # In a more sophisticated version, we'd find the geometrically nearest
-                    for spine_idx in spine_indices:
-                        coupling[hip_joint.index, spine_idx] = 1.0
-                        coupling[spine_idx, hip_joint.index] = 1.0
+                    hip_hinge = hip_joint.hinge
+
+                    # Find the nearest spine by graph distance
+                    min_dist = float('inf')
+                    nearest_spine_idx = None
+
+                    for spine_joint in self._joint_infos:
+                        if spine_joint.joint_type == JointType.SPINE:
+                            dist = self._get_graph_distance(hip_hinge, spine_joint.hinge)
+                            if dist < min_dist:
+                                min_dist = dist
+                                nearest_spine_idx = spine_joint.index
+
+                    # Couple only to the nearest spine
+                    if nearest_spine_idx is not None:
+                        coupling[hip_joint.index, nearest_spine_idx] = 1.0
+                        coupling[nearest_spine_idx, hip_joint.index] = 1.0
 
         # Rule 4: Knee → its Hip: coupled
         for knee_joint in self._joint_infos:
