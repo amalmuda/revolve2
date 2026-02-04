@@ -6,33 +6,44 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=25
 #SBATCH --mem-per-cpu=4G
-#SBATCH --array=1-240
+#SBATCH --array=1-280
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 
 # ============================================
-# CPG COMPARISON EXPERIMENTS
+# CPG COMPARISON EXPERIMENTS (v2)
 # ============================================
 # Comparing:
-#   - Robots: spider, gecko (2)
+#   - Robots: gecko, spider (2)
 #   - Controllers: ode_cpg, sine (2)
-#   - Coupling: uncoupled, neighbor, blf (3)
+#   - Coupling for ode_cpg: uncoupled, neighbor, blf (3)
+#   - Coupling for sine: uncoupled, neighbor, blf, blf_bounded (4)
 #   - Penalty: lambda=0, lambda=1 (2)
 #   - Seeds: 10 per configuration
 #
-# Total: 2 x 2 x 3 x 2 x 10 = 240 jobs
+# Job breakdown:
+#   - ode_cpg: 2 robots × 3 couplings × 2 lambdas × 10 seeds = 120
+#   - sine:    2 robots × 4 couplings × 2 lambdas × 10 seeds = 160
+#   - Total: 280 jobs
+#
+# Layout (gecko first for BLF priority):
+#   Jobs 1-60:    gecko ode_cpg (3 couplings)
+#   Jobs 61-120:  spider ode_cpg (3 couplings)
+#   Jobs 121-200: gecko sine (4 couplings)
+#   Jobs 201-280: spider sine (4 couplings)
 #
 # Settings:
 #   - Simulation time: 30s
 #   - Generations: 300
 #   - Population: 25
 #   - Workers: 25
+#   - Frequency: 0.2 Hz (Bonardi et al.)
 # ============================================
 
-# Configuration arrays (gecko first to prioritize re-running BLF experiments)
+# Configuration arrays
 ROBOTS=("gecko" "spider")
-CONTROLLERS=("ode_cpg" "sine")
-COUPLINGS=("uncoupled" "neighbor" "blf")
+CPG_COUPLINGS=("uncoupled" "neighbor" "blf")
+SINE_COUPLINGS=("uncoupled" "neighbor" "blf" "blf_bounded")
 LAMBDAS=(0 1)
 NUM_SEEDS=10
 
@@ -42,31 +53,69 @@ GENERATIONS=300
 POPULATION=25
 WORKERS=25
 
-# Results directory (v2: fixed BLF, 0.2Hz, paper amplitude bounds)
+# Results directory (v2: fixed BLF detection, 0.2Hz, paper amplitude bounds)
 RESULTS_DIR="results/comparison_v2"
 
-# Calculate indices from task ID (1-based)
-# Layout: seeds x lambdas x couplings x controllers x robots
-# = 10 x 2 x 3 x 2 x 2 = 240
+# Job counts per robot
+CPG_JOBS_PER_ROBOT=$((3 * 2 * NUM_SEEDS))   # 3 couplings × 2 lambdas × 10 seeds = 60
+SINE_JOBS_PER_ROBOT=$((4 * 2 * NUM_SEEDS))  # 4 couplings × 2 lambdas × 10 seeds = 80
+TOTAL_CPG_JOBS=$((CPG_JOBS_PER_ROBOT * 2))  # 120
+TOTAL_SINE_JOBS=$((SINE_JOBS_PER_ROBOT * 2)) # 160
+
 TASK_ID=$SLURM_ARRAY_TASK_ID
 TASK_IDX=$((TASK_ID - 1))
 
-SEED_IDX=$((TASK_IDX % NUM_SEEDS))
-REMAINDER=$((TASK_IDX / NUM_SEEDS))
+# Determine controller and calculate local index
+if [ $TASK_ID -le $TOTAL_CPG_JOBS ]; then
+    # ode_cpg jobs (1-120)
+    CONTROLLER="ode_cpg"
+    LOCAL_IDX=$TASK_IDX
+    JOBS_PER_ROBOT=$CPG_JOBS_PER_ROBOT
+    NUM_COUPLINGS=3
 
-LAMBDA_IDX=$((REMAINDER % 2))
-REMAINDER=$((REMAINDER / 2))
+    # Determine robot
+    if [ $LOCAL_IDX -lt $CPG_JOBS_PER_ROBOT ]; then
+        ROBOT="gecko"
+        ROBOT_LOCAL_IDX=$LOCAL_IDX
+    else
+        ROBOT="spider"
+        ROBOT_LOCAL_IDX=$((LOCAL_IDX - CPG_JOBS_PER_ROBOT))
+    fi
 
-COUPLING_IDX=$((REMAINDER % 3))
-REMAINDER=$((REMAINDER / 3))
+    # Calculate coupling, lambda, seed from robot-local index
+    # Layout: seeds × lambdas × couplings
+    SEED_IDX=$((ROBOT_LOCAL_IDX % NUM_SEEDS))
+    REMAINDER=$((ROBOT_LOCAL_IDX / NUM_SEEDS))
+    LAMBDA_IDX=$((REMAINDER % 2))
+    COUPLING_IDX=$((REMAINDER / 2))
 
-CONTROLLER_IDX=$((REMAINDER % 2))
-ROBOT_IDX=$((REMAINDER / 2))
+    COUPLING=${CPG_COUPLINGS[$COUPLING_IDX]}
+else
+    # sine jobs (121-280)
+    CONTROLLER="sine"
+    LOCAL_IDX=$((TASK_IDX - TOTAL_CPG_JOBS))
+    JOBS_PER_ROBOT=$SINE_JOBS_PER_ROBOT
+    NUM_COUPLINGS=4
 
-# Get actual values
-ROBOT=${ROBOTS[$ROBOT_IDX]}
-CONTROLLER=${CONTROLLERS[$CONTROLLER_IDX]}
-COUPLING=${COUPLINGS[$COUPLING_IDX]}
+    # Determine robot
+    if [ $LOCAL_IDX -lt $SINE_JOBS_PER_ROBOT ]; then
+        ROBOT="gecko"
+        ROBOT_LOCAL_IDX=$LOCAL_IDX
+    else
+        ROBOT="spider"
+        ROBOT_LOCAL_IDX=$((LOCAL_IDX - SINE_JOBS_PER_ROBOT))
+    fi
+
+    # Calculate coupling, lambda, seed from robot-local index
+    # Layout: seeds × lambdas × couplings
+    SEED_IDX=$((ROBOT_LOCAL_IDX % NUM_SEEDS))
+    REMAINDER=$((ROBOT_LOCAL_IDX / NUM_SEEDS))
+    LAMBDA_IDX=$((REMAINDER % 2))
+    COUPLING_IDX=$((REMAINDER / 2))
+
+    COUPLING=${SINE_COUPLINGS[$COUPLING_IDX]}
+fi
+
 LAMBDA=${LAMBDAS[$LAMBDA_IDX]}
 RUN_NUM=$((SEED_IDX + 1))
 
@@ -85,9 +134,9 @@ mkdir -p "$LOG_DIR"
 exec > "${LOG_DIR}/run_${RUN_NUM}.log" 2>&1
 
 echo "=========================================="
-echo "CPG COMPARISON EXPERIMENT"
+echo "CPG COMPARISON EXPERIMENT (v2)"
 echo "=========================================="
-echo "Task ID: $TASK_ID / 240"
+echo "Task ID: $TASK_ID / 280"
 echo ""
 echo "Configuration:"
 echo "  Robot:       $ROBOT"
@@ -102,6 +151,7 @@ echo "  Sim Time:    ${SIM_TIME}s"
 echo "  Generations: $GENERATIONS"
 echo "  Population:  $POPULATION"
 echo "  Workers:     $WORKERS"
+echo "  Frequency:   0.2 Hz"
 echo ""
 echo "Output:        $RESULTS_DIR"
 echo ""

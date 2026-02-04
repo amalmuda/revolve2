@@ -371,7 +371,8 @@ def evaluate_sine(
         # Create brain based on coupling mode
         if coupling == "uncoupled":
             brain = BrainSine.from_parameters(body, params, frequency=frequency)
-        elif coupling == "blf":
+        elif coupling in ("blf", "blf_bounded"):
+            # Both blf and blf_bounded use BLF coupling, difference is in amplitude bounds
             brain, _ = brain_coupled_sine_blf_from_parameters(
                 body, params, frequency=frequency, coupling_strength=coupling_strength
             )
@@ -411,7 +412,7 @@ def get_num_params(robot_name: str, controller: str, coupling: str) -> int:
     else:  # ode_cpg
         if coupling == "uncoupled":
             cpg_structure, _ = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
-        elif coupling == "blf":
+        elif coupling in ("blf", "blf_bounded"):
             cpg_structure, _ = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
         else:  # neighbor
             cpg_structure, _ = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
@@ -422,15 +423,18 @@ def get_bounds(controller: str, n_params: int, n_hinges: int,
                robot_name: str = None, coupling: str = None, use_paper_bounds: bool = True):
     """Get parameter bounds.
 
-    For sine + blf with use_paper_bounds=True, uses Bonardi et al. amplitude bounds:
+    For sine + blf_bounded, uses Bonardi et al. amplitude bounds:
     - Spine: [0, 2π/3] (~120°)
     - Hip: [0, π/2] (~90°)
     - Knee: [0, π/6] (~30°)
     - Ankle: [0, π/6] (~30°)
+
+    For sine + blf (and others), uses uniform [0, 1] bounds.
     """
     if controller == "sine":
         # Check if we should use BLF-based bounds (paper bounds)
-        if coupling == "blf" and robot_name is not None and use_paper_bounds:
+        # Only blf_bounded gets paper bounds; blf uses uniform bounds
+        if coupling == "blf_bounded" and robot_name is not None and use_paper_bounds:
             # Use BLF analysis to get joint-specific amplitude bounds
             body = get_body(robot_name)
             blf_result = analyze_body(body)
@@ -717,8 +721,8 @@ def main():
                         choices=["ode_cpg", "sine"],
                         help="Controller type")
     parser.add_argument("--coupling", type=str, required=True,
-                        choices=["uncoupled", "neighbor", "blf"],
-                        help="Coupling mode")
+                        choices=["uncoupled", "neighbor", "blf", "blf_bounded"],
+                        help="Coupling mode (blf_bounded uses paper amplitude bounds)")
     parser.add_argument("--lambda", dest="lambda_penalty", type=float, required=True,
                         help="Contact penalty lambda (0=no penalty, 1=penalty)")
     parser.add_argument("--penalty-type", type=str, default="dragging",
