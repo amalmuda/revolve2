@@ -33,6 +33,7 @@ from brain_sine import BrainSine, get_num_sine_params
 from brain_sine_coupled import BrainCoupledSine
 from brain_cpg_blf import brain_coupled_sine_blf_from_parameters
 from blf_analyzer import analyze_body, JointType
+from brain_cpg_offset import BrainCpgNetworkStaticWithOffset
 
 # Import Revolve2 CPG
 from revolve2.modular_robot import ModularRobot
@@ -354,6 +355,63 @@ def evaluate_ode_cpg(
         return EvaluationResult(0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
 
 
+def evaluate_ode_cpg_offset(
+    params: np.ndarray,
+    robot_name: str,
+    coupling: str,
+    simulation_time: float,
+    lambda_penalty: float,
+    penalty_type: str = "dragging",
+) -> EvaluationResult:
+    """Evaluate ODE CPG controller WITH OFFSET parameters.
+
+    This adds per-joint offset parameters to the standard Revolve2 CPG.
+    Output = (cpg_state + offset) * hinge_range
+
+    Parameters layout: [cpg_weights..., offsets...]
+    """
+    try:
+        body = get_body(robot_name)
+        active_hinges = body.find_modules_of_type(ActiveHinge)
+        n_hinges = len(active_hinges)
+
+        # Get CPG structure based on coupling mode
+        if coupling == "uncoupled":
+            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
+        elif coupling == "blf":
+            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
+        else:  # neighbor
+            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
+
+        # Create brain with offset from parameters
+        brain = BrainCpgNetworkStaticWithOffset.uniform_from_params(
+            params=params,
+            cpg_network_structure=cpg_structure,
+            initial_state_uniform=math.sqrt(2) * 0.5,
+            output_mapping=output_mapping,
+        )
+
+        robot = ModularRobot(body=body, brain=brain)
+
+        # Setup batch parameters
+        batch_params = make_standard_batch_parameters()
+        batch_params.simulation_time = simulation_time
+
+        # Run simulation with contact detection
+        result = simulate_with_metrics(robot, simulation_time, batch_params)
+
+        # Calculate fitness with penalty
+        result.fitness = calculate_fitness(result, lambda_penalty, penalty_type)
+
+        return result
+
+    except Exception as e:
+        print(f"ODE CPG Offset evaluation error: {e}")
+        import traceback
+        traceback.print_exc()
+        return EvaluationResult(0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
+
+
 def evaluate_sine(
     params: np.ndarray,
     robot_name: str,
@@ -410,14 +468,19 @@ def get_num_params(robot_name: str, controller: str, coupling: str) -> int:
     if controller == "sine":
         # All sine controllers: 3 params per hinge (amp, phase, offset)
         return 3 * n_hinges
-    else:  # ode_cpg
+    else:  # ode_cpg or ode_cpg_offset
         if coupling == "uncoupled":
             cpg_structure, _ = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
         elif coupling in ("blf", "blf_bounded"):
             cpg_structure, _ = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
         else:  # neighbor
             cpg_structure, _ = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
-        return cpg_structure.num_connections
+
+        base_params = cpg_structure.num_connections
+        if controller == "ode_cpg_offset":
+            # Add offset parameter per hinge
+            return base_params + n_hinges
+        return base_params
 
 
 def get_bounds(controller: str, n_params: int, n_hinges: int,
@@ -488,6 +551,12 @@ def get_bounds(controller: str, n_params: int, n_hinges: int,
                 lower.extend([0.0, -math.pi, -0.5])  # amp, phase, offset
                 upper.extend([1.0, math.pi, 0.5])
             return lower, upper
+    elif controller == "ode_cpg_offset":
+        # CPG weights in [-1, 1], offsets in [-0.5, 0.5]
+        n_cpg_params = n_params - n_hinges  # total - offsets = cpg weights
+        lower = [-1.0] * n_cpg_params + [-0.5] * n_hinges
+        upper = [1.0] * n_cpg_params + [0.5] * n_hinges
+        return lower, upper
     else:  # ode_cpg
         return [-1.0] * n_params, [1.0] * n_params
 
@@ -498,7 +567,9 @@ def _eval_wrapper(args):
 
     if controller == "sine":
         result = evaluate_sine(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
-    else:
+    elif controller == "ode_cpg_offset":
+        result = evaluate_ode_cpg_offset(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
+    else:  # ode_cpg
         result = evaluate_ode_cpg(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
 
     return idx, result
@@ -723,8 +794,8 @@ def main():
                         choices=["spider", "gecko"],
                         help="Robot name")
     parser.add_argument("--controller", type=str, required=True,
-                        choices=["ode_cpg", "sine"],
-                        help="Controller type")
+                        choices=["ode_cpg", "ode_cpg_offset", "sine"],
+                        help="Controller type (ode_cpg_offset adds per-joint offset parameters)")
     parser.add_argument("--coupling", type=str, required=True,
                         choices=["uncoupled", "neighbor", "blf", "blf_bounded", "uncoupled_bounded"],
                         help="Coupling mode (blf_bounded/uncoupled_bounded use paper amplitude bounds)")
