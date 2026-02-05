@@ -332,7 +332,7 @@ def evaluate_ode_cpg(
         brain = BrainCpgNetworkStatic.uniform_from_params(
             params=params,
             cpg_network_structure=cpg_structure,
-            initial_state_uniform=math.sqrt(2) * 0.5,
+            initial_state_uniform=1.0,
             output_mapping=output_mapping,
         )
 
@@ -609,7 +609,7 @@ def get_bounds(controller: str, n_params: int, n_hinges: int,
             upper = []
             for _ in range(n_hinges):
                 lower.extend([0.0, -math.pi, -0.5])  # amp, phase, offset
-                upper.extend([1.0, math.pi, 0.5])
+                upper.extend([0.5, math.pi, 0.5])
             return lower, upper
     elif controller == "ode_cpg_offset":
         # CPG weights in [-1, 1], offsets in [-0.5, 0.5]
