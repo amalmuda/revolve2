@@ -355,6 +355,77 @@ def evaluate_ode_cpg(
         return EvaluationResult(0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
 
 
+def evaluate_ode_cpg_init(
+    params: np.ndarray,
+    robot_name: str,
+    coupling: str,
+    simulation_time: float,
+    lambda_penalty: float,
+    penalty_type: str = "dragging",
+) -> EvaluationResult:
+    """Evaluate ODE CPG controller with per-joint evolved initial states.
+
+    Instead of a uniform initial state for all oscillators, each CPG gets
+    its own evolved initial state value. This tests whether different
+    starting conditions lead to different steady-state amplitudes.
+
+    Parameters layout: [cpg_weights..., init_states...]
+    - cpg_weights: num_connections params for the weight matrix
+    - init_states: n_hinges params for per-joint initial states
+    """
+    try:
+        body = get_body(robot_name)
+        active_hinges = body.find_modules_of_type(ActiveHinge)
+        n_hinges = len(active_hinges)
+
+        # Get CPG structure based on coupling mode
+        if coupling == "uncoupled":
+            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
+        elif coupling == "blf":
+            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
+        else:  # neighbor
+            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
+
+        # Split params: [weight_params..., init_state_params...]
+        n_weights = cpg_structure.num_connections
+        weight_params = params[:n_weights]
+        init_params = params[n_weights:]  # n_hinges values
+
+        # Create weight matrix from weight params
+        weight_matrix = cpg_structure.make_connection_weights_matrix_from_params(list(weight_params))
+
+        # Create per-joint initial state vector
+        # Preserves alternating +/- pattern: [+s1, +s2, ..., +sN, -s1, -s2, ..., -sN]
+        initial_state = np.hstack([init_params, -init_params])
+
+        # Create brain directly with per-joint initial state
+        brain = BrainCpgNetworkStatic(
+            initial_state=initial_state,
+            weight_matrix=weight_matrix,
+            output_mapping=output_mapping,
+        )
+
+        robot = ModularRobot(body=body, brain=brain)
+
+        # Setup batch parameters
+        batch_params = make_standard_batch_parameters()
+        batch_params.simulation_time = simulation_time
+
+        # Run simulation with contact detection
+        result = simulate_with_metrics(robot, simulation_time, batch_params)
+
+        # Calculate fitness with penalty
+        result.fitness = calculate_fitness(result, lambda_penalty, penalty_type)
+
+        return result
+
+    except Exception as e:
+        print(f"ODE CPG Init evaluation error: {e}")
+        import traceback
+        traceback.print_exc()
+        return EvaluationResult(0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
+
+
 def evaluate_ode_cpg_offset(
     params: np.ndarray,
     robot_name: str,
@@ -537,8 +608,8 @@ def get_num_params(robot_name: str, controller: str, coupling: str) -> int:
             cpg_structure, _ = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
 
         base_params = cpg_structure.num_connections
-        if controller in ("ode_cpg_offset", "ode_cpg_amp"):
-            # Add offset/amplitude parameter per hinge
+        if controller in ("ode_cpg_offset", "ode_cpg_amp", "ode_cpg_init"):
+            # Add per-joint parameter (offset/amplitude/initial_state)
             return base_params + n_hinges
         return base_params
 
@@ -623,6 +694,12 @@ def get_bounds(controller: str, n_params: int, n_hinges: int,
         lower = [-1.0] * n_cpg_params + [0.0] * n_hinges
         upper = [1.0] * n_cpg_params + [1.0] * n_hinges
         return lower, upper
+    elif controller == "ode_cpg_init":
+        # CPG weights in [-1, 1], per-joint initial states in [0.01, 1.0]
+        n_cpg_params = n_params - n_hinges
+        lower = [-1.0] * n_cpg_params + [0.01] * n_hinges
+        upper = [1.0] * n_cpg_params + [1.0] * n_hinges
+        return lower, upper
     else:  # ode_cpg
         return [-1.0] * n_params, [1.0] * n_params
 
@@ -637,6 +714,8 @@ def _eval_wrapper(args):
         result = evaluate_ode_cpg_offset(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
     elif controller == "ode_cpg_amp":
         result = evaluate_ode_cpg_amp(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
+    elif controller == "ode_cpg_init":
+        result = evaluate_ode_cpg_init(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
     else:  # ode_cpg
         result = evaluate_ode_cpg(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
 
@@ -862,8 +941,8 @@ def main():
                         choices=["spider", "gecko"],
                         help="Robot name")
     parser.add_argument("--controller", type=str, required=True,
-                        choices=["ode_cpg", "ode_cpg_offset", "ode_cpg_amp", "sine"],
-                        help="Controller type (ode_cpg_amp adds per-joint amplitude, ode_cpg_offset adds offset)")
+                        choices=["ode_cpg", "ode_cpg_offset", "ode_cpg_amp", "ode_cpg_init", "sine"],
+                        help="Controller type (ode_cpg_init evolves per-joint initial states, ode_cpg_amp adds per-joint amplitude, ode_cpg_offset adds offset)")
     parser.add_argument("--coupling", type=str, required=True,
                         choices=["uncoupled", "neighbor", "blf", "blf_bounded", "uncoupled_bounded"],
                         help="Coupling mode (blf_bounded/uncoupled_bounded use paper amplitude bounds)")
