@@ -294,6 +294,23 @@ class BodyLimbFinder:
                 body_nodes.append(ap)
                 self._nodes[ap].part_type = PartType.BODY
 
+        # Include all nodes on shortest paths between body nodes.
+        # This captures spine joints that lie between the core and
+        # branching points (they only split the graph into 2 components
+        # so they aren't caught by the clustering power check above).
+        if len(body_nodes) > 1:
+            body_set = set(body_nodes)
+            for i_b in range(len(body_nodes)):
+                for j_b in range(i_b + 1, len(body_nodes)):
+                    path = self._find_shortest_path(
+                        body_nodes[i_b], body_nodes[j_b]
+                    )
+                    for node_idx in path:
+                        if node_idx not in body_set:
+                            body_set.add(node_idx)
+                            body_nodes.append(node_idx)
+                            self._nodes[node_idx].part_type = PartType.BODY
+
         # Find limbs: connected components after removing body
         limbs: list[list[int]] = []
         visited = [False] * n
@@ -358,6 +375,36 @@ class BodyLimbFinder:
                         queue.append(neighbor)
 
         return components
+
+    def _find_shortest_path(self, src: int, dst: int) -> list[int]:
+        """
+        Find shortest path between two nodes using BFS.
+
+        :param src: Source node index.
+        :param dst: Destination node index.
+        :returns: List of node indices on the path (inclusive of src and dst).
+        """
+        from collections import deque
+
+        parent: dict[int, int] = {src: -1}
+        queue: deque[int] = deque([src])
+
+        while queue:
+            current = queue.popleft()
+            if current == dst:
+                # Reconstruct path
+                path = []
+                node = dst
+                while node != -1:
+                    path.append(node)
+                    node = parent[node]
+                return path[::-1]
+            for neighbor in self._nodes[current].neighbors:
+                if neighbor not in parent:
+                    parent[neighbor] = current
+                    queue.append(neighbor)
+
+        return []  # No path found (shouldn't happen in connected graph)
 
     def _calculate_distances_from_body(
         self, limb: list[int], body_nodes: list[int]
@@ -592,12 +639,27 @@ class BLFCpgNetworkGenerator:
             for cpg2 in hip_cpgs[i + 1 :]:
                 connections.add(CpgPair(cpg1, cpg2))
 
-        # 3. Hip connected to nearest spine
+        # 3. Hip connected to nearest spine (BFS through graph)
         if spine_cpgs:
+            spine_node_set = set(classified_hinges[JointType.SPINE])
             for hip_idx in classified_hinges[JointType.HIP]:
                 hip_cpg = node_to_cpg[hip_idx]
-                # Connect to first spine (simplification - could find nearest)
-                connections.add(CpgPair(hip_cpg, spine_cpgs[0]))
+                # BFS from hip to find nearest spine node
+                from collections import deque
+                bfs_queue = deque([(hip_idx, 0)])
+                bfs_visited = {hip_idx}
+                nearest_spine_idx = None
+                while bfs_queue:
+                    current, dist = bfs_queue.popleft()
+                    if current in spine_node_set:
+                        nearest_spine_idx = current
+                        break
+                    for neighbor in self._result.nodes[current].neighbors:
+                        if neighbor not in bfs_visited:
+                            bfs_visited.add(neighbor)
+                            bfs_queue.append((neighbor, dist + 1))
+                if nearest_spine_idx is not None:
+                    connections.add(CpgPair(hip_cpg, node_to_cpg[nearest_spine_idx]))
 
         # 4. Knee connected to corresponding hip (same limb)
         for knee_idx in classified_hinges[JointType.KNEE]:

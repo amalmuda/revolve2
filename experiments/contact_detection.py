@@ -513,171 +513,6 @@ def active_hinges_to_cpg_network_structure_internal_only(
     return cpg_network_structure, output_mapping
 
 
-def active_hinges_to_cpg_network_structure_cross_leg(
-    active_hinges: list[ActiveHinge],
-    body: Body,
-) -> tuple[CpgNetworkStructure, list[tuple[int, ActiveHinge]]]:
-    """
-    Create a CPG structure with cross-leg coupling.
-
-    This creates connections for:
-    - All within-leg connections (standard neighbor coupling within range=2)
-    - Cross-leg connections: all hinges directly attached to the core module
-      are connected to each other (forming a complete graph among shoulder hinges)
-
-    For a spider robot with 8 hinges (4 legs x 2 hinges each):
-    - 8 internal weights (one per CPG)
-    - 4 within-leg connections (shoulder↔knee for each leg)
-    - 6 cross-leg connections (4 shoulders fully connected: C(4,2) = 6)
-    - Total: 18 parameters
-
-    :param active_hinges: The active hinges to base the structure on.
-    :param body: The robot body (needed to identify core-attached hinges).
-    :returns: The created structure and a mapping between state indices and active hinges.
-    """
-    cpgs = CpgNetworkStructure.make_cpgs(len(active_hinges))
-
-    # Create hinge to CPG mapping
-    hinge_to_cpg = {hinge: cpg for hinge, cpg in zip(active_hinges, cpgs)}
-
-    # Start with neighbor connections (within-leg connections)
-    connections: set[CpgPair] = set()
-
-    for active_hinge, cpg in zip(active_hinges, cpgs):
-        neighbours = [
-            n
-            for n in active_hinge.neighbours(within_range=2)
-            if isinstance(n, ActiveHinge)
-        ]
-        connections = connections.union(
-            [CpgPair(cpg, hinge_to_cpg[neighbour]) for neighbour in neighbours]
-        )
-
-    # Identify hinges directly attached to core (shoulder hinges)
-    core_attached_hinges = [h for h in active_hinges if h.parent == body.core]
-
-    # Add cross-leg connections (complete graph among core-attached hinges)
-    for i, hinge1 in enumerate(core_attached_hinges):
-        for hinge2 in core_attached_hinges[i + 1:]:
-            cpg1 = hinge_to_cpg[hinge1]
-            cpg2 = hinge_to_cpg[hinge2]
-            connections.add(CpgPair(cpg1, cpg2))
-
-    cpg_network_structure = CpgNetworkStructure(cpgs, connections)
-    output_mapping = list(zip(cpg_network_structure.output_indices, active_hinges))
-
-    return cpg_network_structure, output_mapping
-
-
-
-
-def active_hinges_to_cpg_network_structure_full_cross_leg(
-    active_hinges: list[ActiveHinge],
-    body: Body,
-) -> tuple[CpgNetworkStructure, list[tuple[int, ActiveHinge]]]:
-    """Create CPG structure with full cross-leg coupling among all 4 leg hinges.
-
-    Like spider's cross-leg but finds the TRUE leg hinges for any body structure.
-    Creates complete graph (6 connections) among FL, FR, BL, BR hinges.
-    """
-    cpgs = CpgNetworkStructure.make_cpgs(len(active_hinges))
-    hinge_to_cpg = {hinge: cpg for hinge, cpg in zip(active_hinges, cpgs)}
-
-    # Start with neighbor connections
-    connections: set[CpgPair] = set()
-    for active_hinge, cpg in zip(active_hinges, cpgs):
-        neighbours = [n for n in active_hinge.neighbours(within_range=2) if isinstance(n, ActiveHinge)]
-        connections = connections.union([CpgPair(cpg, hinge_to_cpg[neighbour]) for neighbour in neighbours])
-
-    # Find all 4 leg hinges using position detection
-    FRONT, RIGHT, BACK, LEFT = 0, 1, 2, 3
-    BRICK_LEFT, BRICK_RIGHT = 2, 1
-
-    position_map = {hinge: get_position_from_path(hinge, body) for hinge in active_hinges}
-
-    leg_hinges = {"front_left": None, "front_right": None, "back_left": None, "back_right": None}
-
-    for hinge in active_hinges:
-        if hinge.parent == body.core:
-            slot = hinge.parent_child_index
-            if slot == LEFT:
-                leg_hinges["front_left"] = hinge
-            elif slot == RIGHT:
-                leg_hinges["front_right"] = hinge
-            elif slot == FRONT:
-                # For spider-like: FRONT is a leg
-                if leg_hinges["front_left"] is None:
-                    leg_hinges["front_left"] = hinge
-            elif slot == BACK:
-                # For spider-like: BACK is a leg
-                if leg_hinges["back_left"] is None:
-                    leg_hinges["back_left"] = hinge
-
-    # Find back-left and back-right from position map
-    for hinge in active_hinges:
-        fb, lr = position_map[hinge]
-        if fb == "back" and lr == "left":
-            leg_hinges["back_left"] = hinge
-        elif fb == "back" and lr == "right":
-            leg_hinges["back_right"] = hinge
-
-    # For spider (4 cardinal legs), map differently
-    spider_like = False
-    core_hinges = [h for h in active_hinges if h.parent == body.core]
-    if len(core_hinges) == 4:
-        spider_like = True
-        for hinge in core_hinges:
-            slot = hinge.parent_child_index
-            if slot == FRONT:
-                leg_hinges["front_left"] = hinge  # Use FRONT as one diagonal corner
-            elif slot == BACK:
-                leg_hinges["back_right"] = hinge  # Use BACK as opposite diagonal
-            elif slot == LEFT:
-                leg_hinges["back_left"] = hinge   # Use LEFT as one diagonal corner
-            elif slot == RIGHT:
-                leg_hinges["front_right"] = hinge # Use RIGHT as opposite diagonal
-
-    # Create complete graph among all found leg hinges
-    found_hinges = [h for h in leg_hinges.values() if h is not None]
-
-    for i, hinge1 in enumerate(found_hinges):
-        for hinge2 in found_hinges[i + 1:]:
-            cpg1 = hinge_to_cpg[hinge1]
-            cpg2 = hinge_to_cpg[hinge2]
-            connections.add(CpgPair(cpg1, cpg2))
-
-    cpg_network_structure = CpgNetworkStructure(cpgs, connections)
-    output_mapping = list(zip(cpg_network_structure.output_indices, active_hinges))
-
-    return cpg_network_structure, output_mapping
-
-
-def active_hinges_to_cpg_network_structure_fully_connected(
-    active_hinges: list[ActiveHinge],
-) -> tuple[CpgNetworkStructure, list[tuple[int, ActiveHinge]]]:
-    """Create CPG structure with EVERY hinge connected to EVERY other hinge.
-
-    This is a truly fully connected topology (complete graph) where all n hinges
-    are connected, resulting in n + n(n-1)/2 parameters:
-    - n internal weights (amplitudes)
-    - n(n-1)/2 external weights (bidirectional connections)
-
-    For spider with 8 hinges: 8 + 28 = 36 parameters.
-    """
-    cpgs = CpgNetworkStructure.make_cpgs(len(active_hinges))
-
-    # Create complete graph: every CPG connected to every other CPG
-    connections: set[CpgPair] = set()
-    for i, cpg1 in enumerate(cpgs):
-        for cpg2 in cpgs[i + 1:]:
-            connections.add(CpgPair(cpg1, cpg2))
-
-    cpg_network_structure = CpgNetworkStructure(cpgs, connections)
-    output_mapping = list(zip(cpg_network_structure.output_indices, active_hinges))
-
-    return cpg_network_structure, output_mapping
-
-
 def active_hinges_to_cpg_network_structure_blf(
     active_hinges: list[ActiveHinge],
     body: Body,
@@ -718,13 +553,8 @@ def simulate_with_contact_detection(
     track_camera: bool = True,
     slip_threshold: float = 0.1,
     no_coupling: bool = False,
-    cross_leg_coupling: bool = False,
-    diagonal_coupling: bool = False,
-    full_cross_leg_coupling: bool = False,
-    fully_connected_coupling: bool = False,
     blf_coupling: bool = False,
     blf_symmetry: bool = False,
-    core_centric_coupling: bool = False,
 ) -> tuple[ContactTracker, LocomotionMetrics]:
     """
     Run simulation with full locomotion metric tracking.
@@ -743,11 +573,8 @@ def simulate_with_contact_detection(
     :param track_camera: Whether camera should follow the robot (only affects viewer mode).
     :param slip_threshold: Velocity threshold (m/s) for foot slip detection.
     :param no_coupling: If True, use only internal CPG weights (no external coupling between hinges).
-    :param cross_leg_coupling: If True, use cross-leg coupling (neighbor + shoulder-to-shoulder connections).
-    :param diagonal_coupling: If True, use diagonal coupling (neighbor + true diagonal leg connections).
-    :param full_cross_leg_coupling: If True, use full cross-leg coupling (complete graph among all 4 leg hinges).
-    :param fully_connected_coupling: If True, every hinge connected to every other hinge (complete graph).
-    :param core_centric_coupling: If True, use Core-Centric coupling (bio-inspired reduced network).
+    :param blf_coupling: If True, use BLF (Body/Limb Finder) bio-inspired coupling.
+    :param blf_symmetry: If True, use BLF-SYM (symmetric limbs share parameters).
     :returns: Tuple of (ContactTracker, LocomotionMetrics).
     """
     # Validate warmup_time
@@ -765,19 +592,8 @@ def simulate_with_contact_detection(
     active_hinges = body.find_modules_of_type(ActiveHinge)
 
     # Choose CPG structure based on coupling mode
-    if core_centric_coupling:
-        from core_centric import active_hinges_to_cpg_network_structure_core_centric
-        (cpg_network_structure, output_mapping) = active_hinges_to_cpg_network_structure_core_centric(active_hinges, body)
-    elif blf_coupling:
+    if blf_coupling:
         (cpg_network_structure, output_mapping) = active_hinges_to_cpg_network_structure_blf(active_hinges, body, use_symmetry=blf_symmetry)
-    elif fully_connected_coupling:
-        (cpg_network_structure, output_mapping) = active_hinges_to_cpg_network_structure_fully_connected(active_hinges)
-    elif full_cross_leg_coupling:
-        (cpg_network_structure, output_mapping) = active_hinges_to_cpg_network_structure_full_cross_leg(active_hinges, body)
-    elif diagonal_coupling:
-        (cpg_network_structure, output_mapping) = active_hinges_to_cpg_network_structure_diagonal(active_hinges, body)
-    elif cross_leg_coupling:
-        (cpg_network_structure, output_mapping) = active_hinges_to_cpg_network_structure_cross_leg(active_hinges, body)
     elif no_coupling:
         (cpg_network_structure, output_mapping) = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
     else:
@@ -1190,106 +1006,3 @@ if __name__ == "__main__":
     main()
 
 
-def get_position_from_path(hinge, body):
-    """Determine hinge position by tracing path to core.
-
-    Note: Core and Brick have different slot indices:
-    - Core: FRONT=0, RIGHT=1, BACK=2, LEFT=3
-    - Brick: FRONT=0, RIGHT=1, LEFT=2 (no BACK)
-    """
-    path_indices = []
-    current = hinge
-    while current is not None and current != body.core:
-        if current.parent_child_index is not None:
-            path_indices.append(current.parent_child_index)
-        current = current.parent
-    path_indices = path_indices[::-1]
-    if not path_indices:
-        return (None, None)
-
-    # Core slot indices
-    CORE_FRONT, CORE_RIGHT, CORE_BACK, CORE_LEFT = 0, 1, 2, 3
-    # Brick slot indices (different from Core!)
-    BRICK_FRONT, BRICK_RIGHT, BRICK_LEFT = 0, 1, 2
-
-    core_slot = path_indices[0]
-    front_back = None
-    left_right = None
-
-    # Determine position from core slot
-    if core_slot == CORE_FRONT:
-        front_back = "front"
-    elif core_slot == CORE_BACK:
-        front_back = "back"
-    elif core_slot == CORE_LEFT:
-        left_right = "left"
-        front_back = "front"
-    elif core_slot == CORE_RIGHT:
-        left_right = "right"
-        front_back = "front"
-
-    # For hinges under BACK, look for LEFT/RIGHT in the rest of path
-    # Note: slots after core are on Brick modules which use different indices
-    if core_slot == CORE_BACK and len(path_indices) > 1:
-        for idx in path_indices[1:]:
-            # Brick uses LEFT=2, RIGHT=1
-            if idx == BRICK_LEFT:
-                left_right = "left"
-            elif idx == BRICK_RIGHT:
-                left_right = "right"
-
-    return (front_back, left_right)
-
-
-def active_hinges_to_cpg_network_structure_diagonal(
-    active_hinges: list[ActiveHinge],
-    body: Body,
-) -> tuple[CpgNetworkStructure, list[tuple[int, ActiveHinge]]]:
-    """Create CPG structure with true diagonal coupling (trot-like)."""
-    cpgs = CpgNetworkStructure.make_cpgs(len(active_hinges))
-    hinge_to_cpg = {hinge: cpg for hinge, cpg in zip(active_hinges, cpgs)}
-    connections: set[CpgPair] = set()
-    for active_hinge, cpg in zip(active_hinges, cpgs):
-        neighbours = [n for n in active_hinge.neighbours(within_range=2) if isinstance(n, ActiveHinge)]
-        connections = connections.union([CpgPair(cpg, hinge_to_cpg[neighbour]) for neighbour in neighbours])
-    FRONT, RIGHT, BACK, LEFT = 0, 1, 2, 3
-    position_map = {hinge: get_position_from_path(hinge, body) for hinge in active_hinges}
-    core_hinges = {"front": None, "back": None, "left": None, "right": None,
-                   "front_left": None, "front_right": None, "back_left": None, "back_right": None}
-    for hinge in active_hinges:
-        if hinge.parent == body.core:
-            slot = hinge.parent_child_index
-            if slot == FRONT:
-                core_hinges["front"] = hinge
-            elif slot == BACK:
-                core_hinges["back"] = hinge
-            elif slot == LEFT:
-                core_hinges["left"] = hinge
-                core_hinges["front_left"] = hinge
-            elif slot == RIGHT:
-                core_hinges["right"] = hinge
-                core_hinges["front_right"] = hinge
-    for hinge in active_hinges:
-        fb, lr = position_map[hinge]
-        if fb == "back" and lr == "left":
-            core_hinges["back_left"] = hinge
-        elif fb == "back" and lr == "right":
-            core_hinges["back_right"] = hinge
-    diagonal_pairs = []
-    if all(core_hinges[k] is not None for k in ["front", "back", "left", "right"]):
-        diagonal_pairs = [(core_hinges["front"], core_hinges["left"]),
-                          (core_hinges["front"], core_hinges["right"]),
-                          (core_hinges["back"], core_hinges["left"]),
-                          (core_hinges["back"], core_hinges["right"])]
-    elif (core_hinges["front_left"] and core_hinges["front_right"] and
-          core_hinges["back_left"] and core_hinges["back_right"]):
-        diagonal_pairs = [(core_hinges["front_left"], core_hinges["back_right"]),
-                          (core_hinges["front_right"], core_hinges["back_left"])]
-    for hinge1, hinge2 in diagonal_pairs:
-        if hinge1 is not None and hinge2 is not None:
-            cpg1 = hinge_to_cpg[hinge1]
-            cpg2 = hinge_to_cpg[hinge2]
-            connections.add(CpgPair(cpg1, cpg2))
-    cpg_network_structure = CpgNetworkStructure(cpgs, connections)
-    output_mapping = list(zip(cpg_network_structure.output_indices, active_hinges))
-    return cpg_network_structure, output_mapping

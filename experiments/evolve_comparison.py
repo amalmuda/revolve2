@@ -2,16 +2,16 @@
 Unified evolution script for CPG comparison experiments.
 
 Supports:
-- Controller types: ode_cpg (Revolve2) or sine (parametric)
+- Controller type: ode_cpg (Revolve2 CPG with RK45 integration)
 - Coupling modes: uncoupled, neighbor, blf
-- Robots: spider, gecko
+- Robots: spider, gecko, gecko_spider
 - Contact penalty: lambda parameter
 - Metrics: distance, dragging (m1), CoT per generation
 
 Results saved to SQLite database for easy analysis.
 
 Usage:
-    python evolve_comparison.py --robot spider --controller sine --coupling blf --lambda 1.0
+    python evolve_comparison.py --robot spider --controller ode_cpg --coupling blf --lambda 1.0
 """
 
 import argparse
@@ -27,13 +27,6 @@ import cma
 import mujoco
 import numpy as np
 from sqlalchemy.orm import Session
-
-# Import sine controllers
-from brain_sine import BrainSine, get_num_sine_params
-from brain_sine_coupled import BrainCoupledSine
-from brain_cpg_blf import brain_coupled_sine_blf_from_parameters
-from blf_analyzer import analyze_body, JointType
-from brain_cpg_offset import BrainCpgNetworkStaticWithOffset, BrainCpgNetworkStaticWithAmplitude
 
 # Import Revolve2 CPG
 from revolve2.modular_robot import ModularRobot
@@ -94,7 +87,7 @@ class EvaluationResult:
 def get_body(robot_name: str):
     """Get robot body by name."""
     if robot_name in ["spider", "ant", "beetle", "babya", "babyb", "blokky",
-                       "garrix", "gecko", "insect", "linkin", "longleg",
+                       "garrix", "gecko", "gecko_spider", "insect", "linkin", "longleg",
                        "park", "penguin", "pentapod", "queen", "salamander",
                        "squarish", "snake", "spider9", "stingray", "tinlicker",
                        "turtle", "ww", "zappa"]:
@@ -332,7 +325,7 @@ def evaluate_ode_cpg(
         brain = BrainCpgNetworkStatic.uniform_from_params(
             params=params,
             cpg_network_structure=cpg_structure,
-            initial_state_uniform=1.0,
+            initial_state_uniform=math.sqrt(2) * 0.5,
             output_mapping=output_mapping,
         )
 
@@ -355,370 +348,31 @@ def evaluate_ode_cpg(
         return EvaluationResult(0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
 
 
-def evaluate_ode_cpg_init(
-    params: np.ndarray,
-    robot_name: str,
-    coupling: str,
-    simulation_time: float,
-    lambda_penalty: float,
-    penalty_type: str = "dragging",
-) -> EvaluationResult:
-    """Evaluate ODE CPG controller with per-joint evolved initial states.
-
-    Instead of a uniform initial state for all oscillators, each CPG gets
-    its own evolved initial state value. This tests whether different
-    starting conditions lead to different steady-state amplitudes.
-
-    Parameters layout: [cpg_weights..., init_states...]
-    - cpg_weights: num_connections params for the weight matrix
-    - init_states: n_hinges params for per-joint initial states
-    """
-    try:
-        body = get_body(robot_name)
-        active_hinges = body.find_modules_of_type(ActiveHinge)
-        n_hinges = len(active_hinges)
-
-        # Get CPG structure based on coupling mode
-        if coupling == "uncoupled":
-            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
-        elif coupling == "blf":
-            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
-        else:  # neighbor
-            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
-
-        # Split params: [weight_params..., init_state_params...]
-        n_weights = cpg_structure.num_connections
-        weight_params = params[:n_weights]
-        init_params = params[n_weights:]  # n_hinges values
-
-        # Create weight matrix from weight params
-        weight_matrix = cpg_structure.make_connection_weights_matrix_from_params(list(weight_params))
-
-        # Create per-joint initial state vector
-        # Preserves alternating +/- pattern: [+s1, +s2, ..., +sN, -s1, -s2, ..., -sN]
-        initial_state = np.hstack([init_params, -init_params])
-
-        # Create brain directly with per-joint initial state
-        brain = BrainCpgNetworkStatic(
-            initial_state=initial_state,
-            weight_matrix=weight_matrix,
-            output_mapping=output_mapping,
-        )
-
-        robot = ModularRobot(body=body, brain=brain)
-
-        # Setup batch parameters
-        batch_params = make_standard_batch_parameters()
-        batch_params.simulation_time = simulation_time
-
-        # Run simulation with contact detection
-        result = simulate_with_metrics(robot, simulation_time, batch_params)
-
-        # Calculate fitness with penalty
-        result.fitness = calculate_fitness(result, lambda_penalty, penalty_type)
-
-        return result
-
-    except Exception as e:
-        print(f"ODE CPG Init evaluation error: {e}")
-        import traceback
-        traceback.print_exc()
-        return EvaluationResult(0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
-
-
-def evaluate_ode_cpg_offset(
-    params: np.ndarray,
-    robot_name: str,
-    coupling: str,
-    simulation_time: float,
-    lambda_penalty: float,
-    penalty_type: str = "dragging",
-) -> EvaluationResult:
-    """Evaluate ODE CPG controller WITH OFFSET parameters.
-
-    This adds per-joint offset parameters to the standard Revolve2 CPG.
-    Output = (cpg_state + offset) * hinge_range
-
-    Parameters layout: [cpg_weights..., offsets...]
-    """
-    try:
-        body = get_body(robot_name)
-        active_hinges = body.find_modules_of_type(ActiveHinge)
-        n_hinges = len(active_hinges)
-
-        # Get CPG structure based on coupling mode
-        if coupling == "uncoupled":
-            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
-        elif coupling == "blf":
-            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
-        else:  # neighbor
-            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
-
-        # Create brain with offset from parameters
-        brain = BrainCpgNetworkStaticWithOffset.uniform_from_params(
-            params=params,
-            cpg_network_structure=cpg_structure,
-            initial_state_uniform=math.sqrt(2) * 0.5,
-            output_mapping=output_mapping,
-        )
-
-        robot = ModularRobot(body=body, brain=brain)
-
-        # Setup batch parameters
-        batch_params = make_standard_batch_parameters()
-        batch_params.simulation_time = simulation_time
-
-        # Run simulation with contact detection
-        result = simulate_with_metrics(robot, simulation_time, batch_params)
-
-        # Calculate fitness with penalty
-        result.fitness = calculate_fitness(result, lambda_penalty, penalty_type)
-
-        return result
-
-    except Exception as e:
-        print(f"ODE CPG Offset evaluation error: {e}")
-        import traceback
-        traceback.print_exc()
-        return EvaluationResult(0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
-
-
-def evaluate_ode_cpg_amp(
-    params: np.ndarray,
-    robot_name: str,
-    coupling: str,
-    simulation_time: float,
-    lambda_penalty: float,
-    penalty_type: str = "dragging",
-) -> EvaluationResult:
-    """Evaluate ODE CPG controller WITH AMPLITUDE parameters.
-
-    This adds per-joint amplitude parameters to the standard Revolve2 CPG.
-    Output = cpg_state × amplitude × hinge_range
-
-    This gives the CPG the same per-joint amplitude control as parametric
-    sine controllers, which may help reduce dragging.
-
-    Parameters layout: [cpg_weights..., amplitudes...]
-    """
-    try:
-        body = get_body(robot_name)
-        active_hinges = body.find_modules_of_type(ActiveHinge)
-        n_hinges = len(active_hinges)
-
-        # Get CPG structure based on coupling mode
-        if coupling == "uncoupled":
-            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
-        elif coupling == "blf":
-            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
-        else:  # neighbor
-            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
-
-        # Create brain with amplitude from parameters
-        brain = BrainCpgNetworkStaticWithAmplitude.uniform_from_params(
-            params=params,
-            cpg_network_structure=cpg_structure,
-            initial_state_uniform=math.sqrt(2) * 0.5,
-            output_mapping=output_mapping,
-        )
-
-        robot = ModularRobot(body=body, brain=brain)
-
-        # Setup batch parameters
-        batch_params = make_standard_batch_parameters()
-        batch_params.simulation_time = simulation_time
-
-        # Run simulation with contact detection
-        result = simulate_with_metrics(robot, simulation_time, batch_params)
-
-        # Calculate fitness with penalty
-        result.fitness = calculate_fitness(result, lambda_penalty, penalty_type)
-
-        return result
-
-    except Exception as e:
-        print(f"ODE CPG Amplitude evaluation error: {e}")
-        import traceback
-        traceback.print_exc()
-        return EvaluationResult(0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
-
-
-def evaluate_sine(
-    params: np.ndarray,
-    robot_name: str,
-    coupling: str,
-    simulation_time: float,
-    lambda_penalty: float,
-    penalty_type: str = "dragging",
-    frequency: float = 0.2,  # Bonardi et al. uses 0.2 Hz
-    coupling_strength: float = 0.5,
-) -> EvaluationResult:
-    """Evaluate Sine CPG controller with full contact detection."""
-    try:
-        body = get_body(robot_name)
-
-        # Create brain based on coupling mode
-        if coupling in ("uncoupled", "uncoupled_bounded"):
-            # uncoupled_bounded uses BLF amplitude bounds but no coupling
-            brain = BrainSine.from_parameters(body, params, frequency=frequency)
-        elif coupling in ("blf", "blf_bounded"):
-            # Both blf and blf_bounded use BLF coupling, difference is in amplitude bounds
-            brain, _ = brain_coupled_sine_blf_from_parameters(
-                body, params, frequency=frequency, coupling_strength=coupling_strength
-            )
-        else:  # neighbor
-            brain = BrainCoupledSine.from_parameters(
-                body, params, frequency=frequency, coupling_strength=coupling_strength
-            )
-
-        robot = ModularRobot(body=body, brain=brain)
-
-        # Setup batch parameters
-        batch_params = make_standard_batch_parameters()
-        batch_params.simulation_time = simulation_time
-
-        # Run simulation with contact detection
-        result = simulate_with_metrics(robot, simulation_time, batch_params)
-
-        # Calculate fitness with penalty
-        result.fitness = calculate_fitness(result, lambda_penalty, penalty_type)
-
-        return result
-
-    except Exception as e:
-        print(f"Sine evaluation error: {e}")
-        return EvaluationResult(0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
-
-
 def get_num_params(robot_name: str, controller: str, coupling: str) -> int:
     """Get number of parameters for given configuration."""
     body = get_body(robot_name)
     active_hinges = body.find_modules_of_type(ActiveHinge)
-    n_hinges = len(active_hinges)
 
-    if controller == "sine":
-        # All sine controllers: 3 params per hinge (amp, phase, offset)
-        return 3 * n_hinges
-    else:  # ode_cpg, ode_cpg_offset, or ode_cpg_amp
-        if coupling == "uncoupled":
-            cpg_structure, _ = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
-        elif coupling in ("blf", "blf_bounded"):
-            cpg_structure, _ = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
-        else:  # neighbor
-            cpg_structure, _ = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
+    if coupling == "uncoupled":
+        cpg_structure, _ = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
+    elif coupling == "blf":
+        cpg_structure, _ = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
+    else:  # neighbor
+        cpg_structure, _ = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
 
-        base_params = cpg_structure.num_connections
-        if controller in ("ode_cpg_offset", "ode_cpg_amp", "ode_cpg_init"):
-            # Add per-joint parameter (offset/amplitude/initial_state)
-            return base_params + n_hinges
-        return base_params
+    return cpg_structure.num_connections
 
 
 def get_bounds(controller: str, n_params: int, n_hinges: int,
                robot_name: str = None, coupling: str = None, use_paper_bounds: bool = True):
-    """Get parameter bounds.
-
-    For sine + blf_bounded, uses bioinspired amplitude bounds scaled for Revolve2:
-    - Spine: [0, 1.0] rad - full range for body undulation
-    - Hip: [0, 0.75] rad - large range for leg swing
-    - Knee: [0, 0.25] rad - restricted for distal precision
-    - Ankle: [0, 0.25] rad - restricted for distal precision
-
-    (Revolve2 V2 hinge physical limit: ±1.047 rad)
-
-    For sine + blf (and others), uses uniform [0, 1] bounds.
-    """
-    if controller == "sine":
-        # Check if we should use BLF-based bounds (paper bounds)
-        # blf_bounded and uncoupled_bounded get paper bounds; blf/uncoupled use uniform bounds
-        if coupling in ("blf_bounded", "uncoupled_bounded") and robot_name is not None and use_paper_bounds:
-            # Use BLF analysis to get joint-specific amplitude bounds
-            body = get_body(robot_name)
-            blf_result = analyze_body(body)
-            active_hinges = body.find_modules_of_type(ActiveHinge)
-
-            # Bioinspired amplitude bounds scaled for Revolve2 V2 hinges
-            # (Physical limit: ±1.047 rad, so max amplitude ~1.0 rad)
-            # Maintains Bonardi et al. proportions: spine > hip > knee/ankle
-            AMP_SPINE = 1.0    # Full range for body undulation
-            AMP_HIP = 0.75     # Large range for leg swing
-            AMP_KNEE = 0.25    # Restricted for distal precision
-            AMP_ANKLE = 0.25   # Restricted for distal precision
-            AMP_DEFAULT = 1.0  # Default for unclassified
-
-            # Build bounds per hinge based on BLF classification
-            lower = []
-            upper = []
-
-            # Create a mapping from hinge index to joint type
-            joint_type_map = {}
-            for joint_info in blf_result.joints:
-                joint_type_map[joint_info.index] = joint_info.joint_type
-
-            for i in range(n_hinges):
-                joint_type = joint_type_map.get(i, JointType.UNCLASSIFIED)
-
-                if joint_type == JointType.SPINE:
-                    amp_max = AMP_SPINE
-                elif joint_type == JointType.HIP:
-                    amp_max = AMP_HIP
-                elif joint_type == JointType.KNEE:
-                    amp_max = AMP_KNEE
-                elif joint_type == JointType.ANKLE:
-                    amp_max = AMP_ANKLE
-                else:
-                    amp_max = AMP_DEFAULT
-
-                # [amp, phase, offset] per hinge
-                lower.extend([0.0, -math.pi, -0.5])
-                upper.extend([amp_max, math.pi, 0.5])
-
-            return lower, upper
-        else:
-            # Standard uniform bounds: [amp, phase, offset] per hinge
-            lower = []
-            upper = []
-            for _ in range(n_hinges):
-                lower.extend([0.0, -math.pi, -0.5])  # amp, phase, offset
-                upper.extend([0.5, math.pi, 0.5])
-            return lower, upper
-    elif controller == "ode_cpg_offset":
-        # CPG weights in [-1, 1], offsets in [-0.5, 0.5]
-        n_cpg_params = n_params - n_hinges  # total - offsets = cpg weights
-        lower = [-1.0] * n_cpg_params + [-0.5] * n_hinges
-        upper = [1.0] * n_cpg_params + [0.5] * n_hinges
-        return lower, upper
-    elif controller == "ode_cpg_amp":
-        # CPG weights in [-1, 1], amplitudes in [0, 1]
-        n_cpg_params = n_params - n_hinges  # total - amplitudes = cpg weights
-        lower = [-1.0] * n_cpg_params + [0.0] * n_hinges
-        upper = [1.0] * n_cpg_params + [1.0] * n_hinges
-        return lower, upper
-    elif controller == "ode_cpg_init":
-        # CPG weights in [-1, 1], per-joint initial states in [0.01, 1.0]
-        n_cpg_params = n_params - n_hinges
-        lower = [-1.0] * n_cpg_params + [0.01] * n_hinges
-        upper = [1.0] * n_cpg_params + [1.0] * n_hinges
-        return lower, upper
-    else:  # ode_cpg
-        return [-1.0] * n_params, [1.0] * n_params
+    """Get parameter bounds. CPG weights in [-1, 1]."""
+    return [-1.0] * n_params, [1.0] * n_params
 
 
 def _eval_wrapper(args):
     """Wrapper for parallel evaluation."""
     idx, params, robot_name, controller, coupling, sim_time, lambda_penalty, penalty_type = args
-
-    if controller == "sine":
-        result = evaluate_sine(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
-    elif controller == "ode_cpg_offset":
-        result = evaluate_ode_cpg_offset(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
-    elif controller == "ode_cpg_amp":
-        result = evaluate_ode_cpg_amp(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
-    elif controller == "ode_cpg_init":
-        result = evaluate_ode_cpg_init(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
-    else:  # ode_cpg
-        result = evaluate_ode_cpg(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
-
+    result = evaluate_ode_cpg(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
     return idx, result
 
 
@@ -795,8 +449,8 @@ def run_evolution(
         rng_seed=seed,
         run_number=run_num,
         penalty_type=penalty_type,
-        frequency=0.2 if controller == "sine" else None,  # Bonardi et al. uses 0.2 Hz
-        coupling_strength=0.5 if controller == "sine" and coupling != "uncoupled" else None,
+        frequency=None,
+        coupling_strength=None,
         num_parameters=n_params,
         num_hinges=n_hinges,
     )
@@ -938,14 +592,14 @@ def main():
     parser = argparse.ArgumentParser(description="Unified CPG evolution for comparison experiments")
 
     parser.add_argument("--robot", type=str, required=True,
-                        choices=["spider", "gecko"],
+                        choices=["spider", "gecko", "gecko_spider"],
                         help="Robot name")
     parser.add_argument("--controller", type=str, required=True,
-                        choices=["ode_cpg", "ode_cpg_offset", "ode_cpg_amp", "ode_cpg_init", "sine"],
-                        help="Controller type (ode_cpg_init evolves per-joint initial states, ode_cpg_amp adds per-joint amplitude, ode_cpg_offset adds offset)")
+                        choices=["ode_cpg"],
+                        help="Controller type")
     parser.add_argument("--coupling", type=str, required=True,
-                        choices=["uncoupled", "neighbor", "blf", "blf_bounded", "uncoupled_bounded"],
-                        help="Coupling mode (blf_bounded/uncoupled_bounded use paper amplitude bounds)")
+                        choices=["uncoupled", "neighbor", "blf"],
+                        help="Coupling mode")
     parser.add_argument("--lambda", dest="lambda_penalty", type=float, required=True,
                         help="Contact penalty lambda (0=no penalty, 1=penalty)")
     parser.add_argument("--penalty-type", type=str, default="dragging",

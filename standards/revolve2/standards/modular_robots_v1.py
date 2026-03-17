@@ -144,6 +144,54 @@ def arachnid_v1() -> BodyV1:
     return body
 
 
+def gecko_spider_v1() -> BodyV1:
+    """
+    Spider/gecko hybrid: elongated body with 4 two-joint legs.
+
+    Front pair: spider-style legs from core left/right.
+    Spine: 2 gecko-style segments extending backward.
+    Rear pair: two-joint legs from the rear spine brick.
+    Total: 10 active hinges (8 leg + 2 spine).
+
+    :returns: the robot.
+    """
+    body = BodyV1()
+
+    # Front-left leg (spider-style: hip + knee)
+    body.core_v1.left = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.left.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.left.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.left.attachment.front.attachment = BrickV1(0.0)
+
+    # Front-right leg (spider-style: hip + knee)
+    body.core_v1.right = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.right.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.right.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment.front.attachment = BrickV1(0.0)
+
+    # Spine segment 1 (gecko-style)
+    body.core_v1.back = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment = BrickV1(-np.pi / 2.0)
+
+    # Spine segment 2
+    body.core_v1.back.attachment.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment = BrickV1(-np.pi / 2.0)
+
+    # Rear-left leg (spider-style: hip + knee)
+    body.core_v1.back.attachment.front.attachment.left = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.left.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.left.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.left.attachment.front.attachment = BrickV1(0.0)
+
+    # Rear-right leg (spider-style: hip + knee)
+    body.core_v1.back.attachment.front.attachment.right = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.right.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.right.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.right.attachment.front.attachment = BrickV1(0.0)
+
+    return body
+
+
 def gecko_v1() -> BodyV1:
     """
     Get the gecko modular robot.
@@ -837,6 +885,8 @@ def get(name: str) -> BodyV1:
     match name:
         case "gecko":
             return gecko_v1()
+        case "gecko_spider":
+            return gecko_spider_v1()
         case "spider":
             return spider_v1()
         case "tripod":
