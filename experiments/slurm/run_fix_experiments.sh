@@ -49,7 +49,7 @@ POPULATION=25
 WORKERS=25
 
 # Results directory
-RESULTS_DIR="results/fix_experiments"
+RESULTS_DIR="results/blf_fix_experiments"
 
 # Job counts
 JOBS_PER_ROBOT=$((3 * 4 * NUM_SEEDS))  # 3 couplings × 4 lambdas × 10 seeds = 120
@@ -81,7 +81,7 @@ cd ~/revolve2/experiments
 
 # Create log directory
 EXPERIMENT_NAME="${ROBOT}_${CONTROLLER}_${COUPLING}_lambda${LAMBDA}"
-LOG_DIR="slurm/logs/fix_experiments/${EXPERIMENT_NAME}"
+LOG_DIR="slurm/logs/blf_fix_experiments/${EXPERIMENT_NAME}"
 mkdir -p "$LOG_DIR"
 
 # Redirect output to log file
