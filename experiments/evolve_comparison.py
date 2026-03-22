@@ -364,9 +364,10 @@ def get_num_params(robot_name: str, controller: str, coupling: str) -> int:
 
 
 def get_bounds(controller: str, n_params: int, n_hinges: int,
-               robot_name: str = None, coupling: str = None, use_paper_bounds: bool = True):
-    """Get parameter bounds. CPG weights in [-1, 1]."""
-    return [-1.0] * n_params, [1.0] * n_params
+               robot_name: str = None, coupling: str = None, use_paper_bounds: bool = True,
+               param_bounds: float = 1.0):
+    """Get parameter bounds. CPG weights in [-b, b]."""
+    return [-param_bounds] * n_params, [param_bounds] * n_params
 
 
 def _eval_wrapper(args):
@@ -389,6 +390,7 @@ def run_evolution(
     seed: int = None,
     results_dir: str = "results",
     run_num: int = 1,
+    param_bounds: float = 1.0,
 ):
     """Run CMA-ES evolution with results saved to SQLite database."""
 
@@ -401,7 +403,8 @@ def run_evolution(
     n_hinges = len(active_hinges)
     n_params = get_num_params(robot_name, controller, coupling)
     lower_bounds, upper_bounds = get_bounds(controller, n_params, n_hinges,
-                                            robot_name=robot_name, coupling=coupling)
+                                            robot_name=robot_name, coupling=coupling,
+                                            param_bounds=param_bounds)
 
     # Create results directory
     experiment_name = f"{robot_name}_{controller}_{coupling}_lambda{int(lambda_penalty)}_{penalty_type}"
@@ -623,6 +626,8 @@ def main():
                         help="Run number for multiple seeds")
     parser.add_argument("--results-dir", type=str, default="results/comparison",
                         help="Results directory")
+    parser.add_argument("--bounds", type=float, default=1.0,
+                        help="Parameter bounds [-b, b] (default: 1.0)")
 
     args = parser.parse_args()
 
@@ -639,6 +644,7 @@ def main():
         seed=args.seed,
         results_dir=args.results_dir,
         run_num=args.run_num,
+        param_bounds=args.bounds,
     )
 
 
