@@ -51,6 +51,7 @@ from revolve2.simulation.scene.vector2 import Vector2
 from contact_detection import (
     active_hinges_to_cpg_network_structure_internal_only,
     active_hinges_to_cpg_network_structure_blf,
+    active_hinges_to_cpg_network_structure_fully_connected,
     identify_geometry_types,
     get_contacts_with_ground,
     get_robot_core_body_id,
@@ -82,6 +83,8 @@ class EvaluationResult:
     final_y: float
     avg_core_height: float = 0.0  # Average core body height during simulation
     min_core_height: float = 0.0  # Minimum core body height during simulation
+    speed_y: float = 0.0  # Directed y-axis speed (m/s)
+    kargar_contacts: float = 0.0  # All contacts per body part per second (Kargar metric)
 
 
 def get_body(robot_name: str):
@@ -190,12 +193,19 @@ def simulate_with_metrics(
     # Track core heights for height penalty
     core_heights = []
 
+    # Track ALL contacts for Kargar metric
+    total_all_contacts = 0
+    num_robot_geoms = len(robot_geom_ids)
+
     while data.time < simulation_time:
         contact_tracker.total_timesteps += 1
 
         # Track contacts
         contacts = get_contacts_with_ground(model, data, ground_geom_ids, robot_geom_ids)
         has_body_contact = False
+
+        # Count ALL ground contacts (for Kargar metric)
+        total_all_contacts += len(contacts)
 
         for robot_geom, ground_geom, force, position in contacts:
             if robot_geom in non_foot_geom_ids:
@@ -253,6 +263,15 @@ def simulate_with_metrics(
         avg_core_height = 0.0
         min_core_height = 0.0
 
+    # Directed y-axis speed (m/s)
+    speed_y = dy / simulation_time if simulation_time > 0 else 0.0
+
+    # Kargar contact metric: all contacts per body part per second
+    if num_robot_geoms > 0 and simulation_time > 0:
+        kargar_contacts = total_all_contacts / num_robot_geoms / simulation_time
+    else:
+        kargar_contacts = 0.0
+
     return EvaluationResult(
         distance=distance,
         dragging=dragging,
@@ -262,6 +281,8 @@ def simulate_with_metrics(
         final_y=float(final_pos[1]),
         avg_core_height=avg_core_height,
         min_core_height=min_core_height,
+        speed_y=speed_y,
+        kargar_contacts=kargar_contacts,
     )
 
 
@@ -295,6 +316,13 @@ def calculate_fitness(
         dragging_factor = math.pow(1 - result.dragging, lambda_penalty)
         height_factor = max(0.01, result.avg_core_height * 10)
         return result.distance * dragging_factor * height_factor
+    elif penalty_type == "kargar_f2":
+        # Kargar et al. (2021): F2 = 0.5 * speed + 0.5 * (1/contacts)
+        # speed in cm/s (paper uses cm/s), contacts per body part per second
+        speed_y_cms = result.speed_y * 100  # m/s to cm/s
+        c = result.kargar_contacts
+        inv_c = 1.0 / max(c, 0.001)  # avoid division by zero
+        return 0.5 * speed_y_cms + 0.5 * inv_c
     else:
         # Default to dragging
         return result.distance * math.pow(1 - result.dragging, lambda_penalty)
@@ -307,27 +335,43 @@ def evaluate_ode_cpg(
     simulation_time: float,
     lambda_penalty: float,
     penalty_type: str = "dragging",
+    evolve_initial_state: bool = False,
 ) -> EvaluationResult:
     """Evaluate ODE CPG controller with full contact detection."""
     try:
         body = get_body(robot_name)
         active_hinges = body.find_modules_of_type(ActiveHinge)
+        n_hinges = len(active_hinges)
 
         # Get CPG structure based on coupling mode
         if coupling == "uncoupled":
             cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
         elif coupling == "blf":
             cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
+        elif coupling == "fully_connected":
+            cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_fully_connected(active_hinges)
         else:  # neighbor
             cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
 
-        # Create brain from parameters
-        brain = BrainCpgNetworkStatic.uniform_from_params(
-            params=params,
-            cpg_network_structure=cpg_structure,
-            initial_state_uniform=math.sqrt(2) * 0.5,
-            output_mapping=output_mapping,
-        )
+        if evolve_initial_state:
+            # Last 2*n_hinges params are initial states
+            n_state = 2 * n_hinges
+            weight_params = params[:-n_state]
+            initial_state = np.clip(np.array(params[-n_state:]), -1.0, 1.0)
+            weight_matrix = cpg_structure.make_connection_weights_matrix_from_params(list(weight_params))
+            brain = BrainCpgNetworkStatic(
+                initial_state=initial_state,
+                weight_matrix=weight_matrix,
+                output_mapping=output_mapping,
+            )
+        else:
+            # Create brain from parameters
+            brain = BrainCpgNetworkStatic.uniform_from_params(
+                params=params,
+                cpg_network_structure=cpg_structure,
+                initial_state_uniform=math.sqrt(2) * 0.5,
+                output_mapping=output_mapping,
+            )
 
         robot = ModularRobot(body=body, brain=brain)
 
@@ -357,6 +401,8 @@ def get_num_params(robot_name: str, controller: str, coupling: str) -> int:
         cpg_structure, _ = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
     elif coupling == "blf":
         cpg_structure, _ = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
+    elif coupling == "fully_connected":
+        cpg_structure, _ = active_hinges_to_cpg_network_structure_fully_connected(active_hinges)
     else:  # neighbor
         cpg_structure, _ = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
 
@@ -365,15 +411,27 @@ def get_num_params(robot_name: str, controller: str, coupling: str) -> int:
 
 def get_bounds(controller: str, n_params: int, n_hinges: int,
                robot_name: str = None, coupling: str = None, use_paper_bounds: bool = True,
-               param_bounds: float = 1.0):
-    """Get parameter bounds. CPG weights in [-b, b]."""
+               param_bounds: float = 1.0, coupling_bounds: float = None):
+    """Get parameter bounds. CPG weights in [-b, b].
+    If coupling_bounds is set, internal weights use param_bounds and
+    coupling weights use coupling_bounds."""
+    if coupling_bounds is not None:
+        n_internal = n_hinges  # one internal weight per hinge
+        n_coupling = n_params - n_internal
+        lower = [-param_bounds] * n_internal + [-coupling_bounds] * n_coupling
+        upper = [param_bounds] * n_internal + [coupling_bounds] * n_coupling
+        return lower, upper
     return [-param_bounds] * n_params, [param_bounds] * n_params
 
 
 def _eval_wrapper(args):
     """Wrapper for parallel evaluation."""
-    idx, params, robot_name, controller, coupling, sim_time, lambda_penalty, penalty_type = args
-    result = evaluate_ode_cpg(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type)
+    if len(args) == 9:
+        idx, params, robot_name, controller, coupling, sim_time, lambda_penalty, penalty_type, evolve_init = args
+    else:
+        idx, params, robot_name, controller, coupling, sim_time, lambda_penalty, penalty_type = args
+        evolve_init = False
+    result = evaluate_ode_cpg(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type, evolve_initial_state=evolve_init)
     return idx, result
 
 
@@ -391,6 +449,8 @@ def run_evolution(
     results_dir: str = "results",
     run_num: int = 1,
     param_bounds: float = 1.0,
+    coupling_bounds: float = None,
+    evolve_initial_state: bool = False,
 ):
     """Run CMA-ES evolution with results saved to SQLite database."""
 
@@ -402,9 +462,19 @@ def run_evolution(
     active_hinges = body.find_modules_of_type(ActiveHinge)
     n_hinges = len(active_hinges)
     n_params = get_num_params(robot_name, controller, coupling)
+
+    # Add initial state params if evolving them
+    n_state_params = 2 * n_hinges if evolve_initial_state else 0
+    total_params = n_params + n_state_params
+
     lower_bounds, upper_bounds = get_bounds(controller, n_params, n_hinges,
                                             robot_name=robot_name, coupling=coupling,
-                                            param_bounds=param_bounds)
+                                            param_bounds=param_bounds,
+                                            coupling_bounds=coupling_bounds)
+    if evolve_initial_state:
+        # Initial state params bounded to [-1, 1]
+        lower_bounds = lower_bounds + [-1.0] * n_state_params
+        upper_bounds = upper_bounds + [1.0] * n_state_params
 
     # Create results directory
     experiment_name = f"{robot_name}_{controller}_{coupling}_lambda{int(lambda_penalty)}_{penalty_type}"
@@ -422,7 +492,7 @@ def run_evolution(
     print(f"  Coupling:       {coupling}")
     print(f"  Lambda:         {lambda_penalty}")
     print(f"  Penalty Type:   {penalty_type}")
-    print(f"  Parameters:     {n_params}")
+    print(f"  Parameters:     {total_params} ({n_params} weights + {n_state_params} initial states)")
     print(f"  Sim Time:       {simulation_time}s")
     print(f"  Generations:    {num_generations}")
     print(f"  Population:     {population_size}")
@@ -454,7 +524,7 @@ def run_evolution(
         penalty_type=penalty_type,
         frequency=None,
         coupling_strength=None,
-        num_parameters=n_params,
+        num_parameters=total_params,
         num_hinges=n_hinges,
     )
     with Session(dbengine) as session:
@@ -490,7 +560,7 @@ def run_evolution(
         results = [None] * len(solutions)
         args_list = [
             (i, np.array(params), robot_name, controller, coupling,
-             simulation_time, lambda_penalty, penalty_type)
+             simulation_time, lambda_penalty, penalty_type, evolve_initial_state)
             for i, params in enumerate(solutions)
         ]
 
@@ -601,16 +671,17 @@ def main():
                         choices=["ode_cpg"],
                         help="Controller type")
     parser.add_argument("--coupling", type=str, required=True,
-                        choices=["uncoupled", "neighbor", "blf"],
+                        choices=["uncoupled", "neighbor", "blf", "fully_connected"],
                         help="Coupling mode")
     parser.add_argument("--lambda", dest="lambda_penalty", type=float, required=True,
                         help="Contact penalty lambda (0=no penalty, 1=penalty)")
     parser.add_argument("--penalty-type", type=str, default="dragging",
-                        choices=["dragging", "height", "min_height", "combined"],
+                        choices=["dragging", "height", "min_height", "combined", "kargar_f2"],
                         help="Penalty type: dragging (penalize non-foot contact), "
                              "height (reward avg core height), "
                              "min_height (reward min core height), "
-                             "combined (both dragging + height)")
+                             "combined (both dragging + height), "
+                             "kargar_f2 (Kargar et al. 2021: 0.5*speed_y + 0.5*(1/contacts))")
 
     parser.add_argument("--sim-time", type=float, default=30.0,
                         help="Simulation time in seconds (default: 30)")
@@ -628,6 +699,10 @@ def main():
                         help="Results directory")
     parser.add_argument("--bounds", type=float, default=1.0,
                         help="Parameter bounds [-b, b] (default: 1.0)")
+    parser.add_argument("--coupling-bounds", type=float, default=None,
+                        help="Separate bounds for coupling weights (default: same as --bounds)")
+    parser.add_argument("--evolve-initial-state", action="store_true",
+                        help="Evolve 2N initial state values alongside weights")
 
     args = parser.parse_args()
 
@@ -645,6 +720,8 @@ def main():
         results_dir=args.results_dir,
         run_num=args.run_num,
         param_bounds=args.bounds,
+        coupling_bounds=args.coupling_bounds,
+        evolve_initial_state=args.evolve_initial_state,
     )
 
 

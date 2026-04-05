@@ -143,3 +143,5 @@ cython_debug/
 
 # Experiment results (large data files)
 experiments/results/
+experiments/*.txt
+experiments/*.npy

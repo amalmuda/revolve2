@@ -29,6 +29,7 @@ from revolve2.simulation.simulator import BatchParameters
 from contact_detection import (
     active_hinges_to_cpg_network_structure_blf,
     active_hinges_to_cpg_network_structure_internal_only,
+    active_hinges_to_cpg_network_structure_fully_connected,
 )
 
 
@@ -48,6 +49,8 @@ def build_robot(robot_name, controller=None, coupling=None, params_path=None):
         cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
     elif coupling == "blf":
         cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
+    elif coupling == "fully_connected":
+        cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_fully_connected(active_hinges)
     else:  # neighbor
         cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
 
@@ -63,12 +66,12 @@ def build_robot(robot_name, controller=None, coupling=None, params_path=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize a robot in MuJoCo viewer")
-    parser.add_argument("robot", type=str, choices=["spider", "gecko", "gecko_spider"])
+    parser.add_argument("robot", type=str, choices=["spider", "gecko", "gecko_spider", "salamander", "ant", "snake", "pentapod", "turtle", "babya", "squarish", "longleg", "stingray"])
     parser.add_argument("--params", type=str, default=None, help="Path to saved .npy params")
     parser.add_argument("--controller", type=str, default=None,
                         choices=["ode_cpg"])
     parser.add_argument("--coupling", type=str, default="uncoupled",
-                        choices=["uncoupled", "neighbor", "blf"])
+                        choices=["uncoupled", "neighbor", "blf", "fully_connected"])
     parser.add_argument("--time", type=float, default=30.0, help="Simulation time")
     args = parser.parse_args()
 

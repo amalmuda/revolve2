@@ -513,6 +513,27 @@ def active_hinges_to_cpg_network_structure_internal_only(
     return cpg_network_structure, output_mapping
 
 
+def active_hinges_to_cpg_network_structure_fully_connected(
+    active_hinges: list[ActiveHinge],
+) -> tuple[CpgNetworkStructure, list[tuple[int, ActiveHinge]]]:
+    """
+    Create a CPG structure where every oscillator is coupled to every other.
+
+    This is the all-to-all topology: N internal weights + C(N,2) coupling weights.
+
+    :param active_hinges: The active hinges to base the structure on.
+    :returns: The created structure and a mapping between state indices and active hinges.
+    """
+    cpgs = CpgNetworkStructure.make_cpgs(len(active_hinges))
+    connections: set[CpgPair] = set()
+    for i in range(len(cpgs)):
+        for j in range(i + 1, len(cpgs)):
+            connections.add(CpgPair(cpgs[i], cpgs[j]))
+    cpg_network_structure = CpgNetworkStructure(cpgs, connections)
+    output_mapping = list(zip(cpg_network_structure.output_indices, active_hinges))
+    return cpg_network_structure, output_mapping
+
+
 def active_hinges_to_cpg_network_structure_blf(
     active_hinges: list[ActiveHinge],
     body: Body,

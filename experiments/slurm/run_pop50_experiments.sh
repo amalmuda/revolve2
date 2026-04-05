@@ -1,42 +1,41 @@
 #!/bin/bash
-#SBATCH --job-name=fix_exp
+#SBATCH --job-name=pop50_exp
 #SBATCH --account=ec29
-#SBATCH --time=2:00:00
+#SBATCH --time=3:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=25
+#SBATCH --cpus-per-task=50
 #SBATCH --mem-per-cpu=4G
-#SBATCH --array=1-1000
+#SBATCH --array=1-720
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 
 # ============================================
-# FIX EXPERIMENTS (initial_state = sqrt(2)*0.5)
+# POPULATION 50 EXPERIMENTS
 # ============================================
 # Comparing:
-#   - Robots: gecko, spider, gecko_spider (3)
+#   - Robots: gecko, spider (2)
 #   - Controller: ode_cpg (standard revolve2 CPG)
 #   - Coupling: uncoupled, neighbor, blf (3)
 #   - Penalty: lambda=0, 1, 2, 3 (4)
 #   - Seeds: 30 per configuration
 #
 # Job breakdown:
-#   3 robots × 3 couplings × 4 lambdas × 30 seeds = 1080
+#   2 robots × 3 couplings × 4 lambdas × 30 seeds = 720
 #
 # Layout:
-#   Jobs 1-360:    gecko        (3 couplings × 4 lambdas × 30 seeds)
-#   Jobs 361-720:  spider       (3 couplings × 4 lambdas × 30 seeds)
-#   Jobs 721-1080: gecko_spider (3 couplings × 4 lambdas × 30 seeds)
+#   Jobs 1-360:    gecko   (3 couplings × 4 lambdas × 30 seeds)
+#   Jobs 361-720:  spider  (3 couplings × 4 lambdas × 30 seeds)
 #
 # Settings:
 #   - Simulation time: 30s
 #   - Generations: 300
-#   - Population: 25
-#   - Workers: 25
+#   - Population: 50
+#   - Workers: 50
 # ============================================
 
 # Configuration arrays
-ROBOTS=("gecko" "spider" "gecko_spider")
+ROBOTS=("gecko" "spider")
 COUPLINGS=("uncoupled" "neighbor" "blf")
 LAMBDAS=(0 1 2 3)
 NUM_SEEDS=30
@@ -45,14 +44,14 @@ NUM_SEEDS=30
 CONTROLLER="ode_cpg"
 SIM_TIME=30
 GENERATIONS=300
-POPULATION=25
-WORKERS=25
+POPULATION=50
+WORKERS=50
 
 # Results directory
-RESULTS_DIR="results/final_experiments"
+RESULTS_DIR="results/pop50_experiments"
 
 # Job counts
-JOBS_PER_ROBOT=$((3 * 4 * NUM_SEEDS))  # 3 couplings × 4 lambdas × 10 seeds = 120
+JOBS_PER_ROBOT=$((3 * 4 * NUM_SEEDS))  # 3 couplings × 4 lambdas × 30 seeds = 360
 
 TASK_ID=$SLURM_ARRAY_TASK_ID
 TASK_IDX=$((TASK_ID - 1))
@@ -81,16 +80,16 @@ cd ~/revolve2/experiments
 
 # Create log directory
 EXPERIMENT_NAME="${ROBOT}_${CONTROLLER}_${COUPLING}_lambda${LAMBDA}"
-LOG_DIR="slurm/logs/final_experiments/${EXPERIMENT_NAME}"
+LOG_DIR="slurm/logs/pop50_experiments/${EXPERIMENT_NAME}"
 mkdir -p "$LOG_DIR"
 
 # Redirect output to log file
 exec > "${LOG_DIR}/run_${RUN_NUM}.log" 2>&1
 
 echo "=========================================="
-echo "FIX EXPERIMENT (initial_state=sqrt(2)*0.5)"
+echo "POPULATION 50 EXPERIMENT"
 echo "=========================================="
-echo "Task ID: $TASK_ID / 1080"
+echo "Task ID: $TASK_ID / 720"
 echo ""
 echo "Configuration:"
 echo "  Robot:       $ROBOT"
