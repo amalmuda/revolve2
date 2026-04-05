@@ -35,6 +35,7 @@ def all() -> list[BodyV1]:
         zappa_v1(),
         ant_v1(),
         park_v1(),
+        mantis_v1(),
     ]
 
 
@@ -874,6 +875,54 @@ def zappa_v1() -> BodyV1:
     return body
 
 
+def mantis_v1() -> BodyV1:
+    """
+    Get the mantis modular robot.
+
+    Asymmetric cross-shaped robot with a long spine, offset left arm,
+    right arm from core, short front limb, and a tail.
+    17 modules total: 1 core + 8 active hinges + 8 bricks.
+
+    :returns: the robot.
+    """
+    body = BodyV1()
+
+    # Front limb (short): hinge (0 rot = horizontal swing) + foot
+    body.core_v1.front = ActiveHingeV1(0.0)
+    body.core_v1.front.attachment = BrickV1(0.0)
+
+    # Right arm: hinge + brick + hinge + foot
+    body.core_v1.right = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.right.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.right.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment.front.attachment = BrickV1(0.0)
+
+    # Back spine segment 1
+    body.core_v1.back = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment = BrickV1(-np.pi / 2.0)
+
+    # Back spine segment 2 (branch point)
+    body.core_v1.back.attachment.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment = BrickV1(-np.pi / 2.0)
+
+    # Tail (continues down from branch point): 0 rot = horizontal swing
+    body.core_v1.back.attachment.front.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment = BrickV1(0.0)
+
+    # Left arm (branches from spine, OPPOSITE side to right arm)
+    # .right here = world LEFT because spine bricks face backward
+    body.core_v1.back.attachment.front.attachment.right = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.right.attachment = BrickV1(0.0)
+    body.core_v1.back.attachment.front.attachment.right.attachment.front = ActiveHingeV1(
+        0.0
+    )
+    body.core_v1.back.attachment.front.attachment.right.attachment.front.attachment = (
+        BrickV1(0.0)
+    )
+
+    return body
+
+
 def get(name: str) -> BodyV1:
     """
     Get a robot by name.
@@ -933,5 +982,7 @@ def get(name: str) -> BodyV1:
             return ww_v1()
         case "zappa":
             return zappa_v1()
+        case "mantis":
+            return mantis_v1()
         case _:
             raise ValueError(f"Robot does not exist: {name}")
