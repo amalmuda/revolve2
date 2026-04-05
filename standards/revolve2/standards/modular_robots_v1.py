@@ -36,6 +36,7 @@ def all() -> list[BodyV1]:
         ant_v1(),
         park_v1(),
         mantis_v1(),
+        hydra_v1(),
     ]
 
 
@@ -923,6 +924,43 @@ def mantis_v1() -> BodyV1:
     return body
 
 
+def hydra_v1() -> BodyV1:
+    """
+    Get the hydra modular robot.
+
+    Cross-shaped robot with a long front spine, two L-shaped arms
+    (left foot down, right foot up), and a back tail.
+    15 modules total: 1 core + 7 active hinges + 7 bricks.
+
+    :returns: the robot.
+    """
+    body = BodyV1()
+
+    # Front spine (long): hinge + brick + hinge (90° rotated) + top foot
+    body.core_v1.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.front.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.front.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.front.attachment.front.attachment = BrickV1(0.0)
+
+    # Left arm (L-shape): hinge + brick, foot going DOWN
+    body.core_v1.left = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.left.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.left.attachment.left = ActiveHingeV1(0.0)
+    body.core_v1.left.attachment.left.attachment = BrickV1(0.0)
+
+    # Right arm (L-shape): hinge + brick, foot going UP
+    body.core_v1.right = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.right.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.right.attachment.left = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment.left.attachment = BrickV1(0.0)
+
+    # Back (90° rotated): hinge + foot
+    body.core_v1.back = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment = BrickV1(0.0)
+
+    return body
+
+
 def get(name: str) -> BodyV1:
     """
     Get a robot by name.
@@ -984,5 +1022,7 @@ def get(name: str) -> BodyV1:
             return zappa_v1()
         case "mantis":
             return mantis_v1()
+        case "hydra":
+            return hydra_v1()
         case _:
             raise ValueError(f"Robot does not exist: {name}")
