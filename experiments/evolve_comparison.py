@@ -426,11 +426,31 @@ def get_bounds(controller: str, n_params: int, n_hinges: int,
 
 def _eval_wrapper(args):
     """Wrapper for parallel evaluation."""
-    if len(args) == 9:
+    if len(args) == 10:
+        idx, params, robot_name, controller, coupling, sim_time, lambda_penalty, penalty_type, evolve_init, fixed_coupling = args
+    elif len(args) == 9:
         idx, params, robot_name, controller, coupling, sim_time, lambda_penalty, penalty_type, evolve_init = args
+        fixed_coupling = None
     else:
         idx, params, robot_name, controller, coupling, sim_time, lambda_penalty, penalty_type = args
         evolve_init = False
+        fixed_coupling = None
+
+    # If fixed coupling, append fixed external weights to internal-only params
+    if fixed_coupling is not None:
+        body = get_body(robot_name)
+        active_hinges = body.find_modules_of_type(ActiveHinge)
+        if coupling == "uncoupled":
+            cpg_structure, _ = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
+        elif coupling == "blf":
+            cpg_structure, _ = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
+        elif coupling == "fully_connected":
+            cpg_structure, _ = active_hinges_to_cpg_network_structure_fully_connected(active_hinges)
+        else:
+            cpg_structure, _ = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
+        n_external = len(cpg_structure.connections)
+        params = np.concatenate([params, np.full(n_external, fixed_coupling)])
+
     result = evaluate_ode_cpg(params, robot_name, coupling, sim_time, lambda_penalty, penalty_type, evolve_initial_state=evolve_init)
     return idx, result
 
@@ -451,6 +471,7 @@ def run_evolution(
     param_bounds: float = 1.0,
     coupling_bounds: float = None,
     evolve_initial_state: bool = False,
+    fixed_coupling: float = None,
 ):
     """Run CMA-ES evolution with results saved to SQLite database."""
 
@@ -461,16 +482,26 @@ def run_evolution(
     body = get_body(robot_name)
     active_hinges = body.find_modules_of_type(ActiveHinge)
     n_hinges = len(active_hinges)
-    n_params = get_num_params(robot_name, controller, coupling)
+
+    if fixed_coupling is not None:
+        # Only optimize internal weights; external are fixed
+        n_params = n_hinges
+    else:
+        n_params = get_num_params(robot_name, controller, coupling)
 
     # Add initial state params if evolving them
     n_state_params = 2 * n_hinges if evolve_initial_state else 0
     total_params = n_params + n_state_params
 
-    lower_bounds, upper_bounds = get_bounds(controller, n_params, n_hinges,
-                                            robot_name=robot_name, coupling=coupling,
-                                            param_bounds=param_bounds,
-                                            coupling_bounds=coupling_bounds)
+    if fixed_coupling is not None:
+        # Only internal weights, all same bounds
+        lower_bounds = [-param_bounds] * n_params
+        upper_bounds = [param_bounds] * n_params
+    else:
+        lower_bounds, upper_bounds = get_bounds(controller, n_params, n_hinges,
+                                                robot_name=robot_name, coupling=coupling,
+                                                param_bounds=param_bounds,
+                                                coupling_bounds=coupling_bounds)
     if evolve_initial_state:
         # Initial state params bounded to [-1, 1]
         lower_bounds = lower_bounds + [-1.0] * n_state_params
@@ -492,7 +523,10 @@ def run_evolution(
     print(f"  Coupling:       {coupling}")
     print(f"  Lambda:         {lambda_penalty}")
     print(f"  Penalty Type:   {penalty_type}")
-    print(f"  Parameters:     {total_params} ({n_params} weights + {n_state_params} initial states)")
+    if fixed_coupling is not None:
+        print(f"  Parameters:     {total_params} ({n_params} internal only, external fixed={fixed_coupling})")
+    else:
+        print(f"  Parameters:     {total_params} ({n_params} weights + {n_state_params} initial states)")
     print(f"  Sim Time:       {simulation_time}s")
     print(f"  Generations:    {num_generations}")
     print(f"  Population:     {population_size}")
@@ -560,7 +594,7 @@ def run_evolution(
         results = [None] * len(solutions)
         args_list = [
             (i, np.array(params), robot_name, controller, coupling,
-             simulation_time, lambda_penalty, penalty_type, evolve_initial_state)
+             simulation_time, lambda_penalty, penalty_type, evolve_initial_state, fixed_coupling)
             for i, params in enumerate(solutions)
         ]
 
@@ -703,6 +737,8 @@ def main():
                         help="Separate bounds for coupling weights (default: same as --bounds)")
     parser.add_argument("--evolve-initial-state", action="store_true",
                         help="Evolve 2N initial state values alongside weights")
+    parser.add_argument("--fixed-coupling", type=float, default=None,
+                        help="Fix all coupling weights to this value (only optimize internal weights)")
 
     args = parser.parse_args()
 
@@ -722,6 +758,7 @@ def main():
         param_bounds=args.bounds,
         coupling_bounds=args.coupling_bounds,
         evolve_initial_state=args.evolve_initial_state,
+        fixed_coupling=args.fixed_coupling,
     )
 
 
