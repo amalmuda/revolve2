@@ -66,7 +66,7 @@ def build_robot(robot_name, controller=None, coupling=None, params_path=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize a robot in MuJoCo viewer")
-    parser.add_argument("robot", type=str, choices=["spider", "gecko", "gecko_spider", "salamander", "ant", "snake", "pentapod", "turtle", "babya", "squarish", "longleg", "stingray", "mantis", "hydra"])
+    parser.add_argument("robot", type=str, choices=["spider", "big_spider", "gecko", "big_gecko", "gecko_spider", "salamander", "ant", "snake", "pentapod", "turtle", "babya", "squarish", "longleg", "stingray", "mantis", "hydra"])
     parser.add_argument("--params", type=str, default=None, help="Path to saved .npy params")
     parser.add_argument("--controller", type=str, default=None,
                         choices=["ode_cpg"])

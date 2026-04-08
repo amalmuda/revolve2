@@ -89,8 +89,8 @@ class EvaluationResult:
 
 def get_body(robot_name: str):
     """Get robot body by name."""
-    if robot_name in ["spider", "ant", "beetle", "babya", "babyb", "blokky",
-                       "garrix", "gecko", "gecko_spider", "insect", "linkin", "longleg",
+    if robot_name in ["spider", "big_spider", "ant", "beetle", "babya", "babyb", "blokky",
+                       "garrix", "gecko", "big_gecko", "gecko_spider", "insect", "linkin", "longleg",
                        "hydra", "mantis", "park", "penguin", "pentapod", "queen", "salamander",
                        "squarish", "snake", "spider9", "stingray", "tinlicker",
                        "turtle", "ww", "zappa"]:
@@ -699,7 +699,7 @@ def main():
     parser = argparse.ArgumentParser(description="Unified CPG evolution for comparison experiments")
 
     parser.add_argument("--robot", type=str, required=True,
-                        choices=["spider", "gecko", "gecko_spider", "mantis", "hydra"],
+                        choices=["spider", "big_spider", "gecko", "big_gecko", "gecko_spider", "mantis", "hydra"],
                         help="Robot name")
     parser.add_argument("--controller", type=str, required=True,
                         choices=["ode_cpg"],

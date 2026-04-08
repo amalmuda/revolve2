@@ -71,6 +71,54 @@ def spider_v1() -> BodyV1:
     return body
 
 
+def big_spider_v1() -> BodyV1:
+    """
+    Get the big spider modular robot.
+
+    A spider with 3 active hinges per leg (hip, knee, ankle) instead of 2.
+    Structure per leg: hip-hinge -> brick -> knee-hinge -> brick -> ankle-hinge -> brick (foot)
+
+    Total: 12 active hinges, 25 modules.
+
+    :returns: the robot.
+    """
+    body = BodyV1()
+
+    # Left leg
+    body.core_v1.left = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.left.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.left.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.left.attachment.front.attachment = BrickV1(0.0)
+    body.core_v1.left.attachment.front.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.left.attachment.front.attachment.front.attachment = BrickV1(0.0)
+
+    # Right leg
+    body.core_v1.right = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.right.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.right.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment.front.attachment = BrickV1(0.0)
+    body.core_v1.right.attachment.front.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment.front.attachment.front.attachment = BrickV1(0.0)
+
+    # Front leg
+    body.core_v1.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.front.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.front.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.front.attachment.front.attachment = BrickV1(0.0)
+    body.core_v1.front.attachment.front.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.front.attachment.front.attachment.front.attachment = BrickV1(0.0)
+
+    # Back leg
+    body.core_v1.back = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.back.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment = BrickV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment = BrickV1(0.0)
+
+    return body
+
+
 def tripod_v1() -> BodyV1:
     """
     Get the tripod modular robot (3-legged spider).
@@ -216,6 +264,57 @@ def gecko_v1() -> BodyV1:
     body.core_v1.back.attachment.front.attachment.left.attachment = BrickV1(0.0)
     body.core_v1.back.attachment.front.attachment.right = ActiveHingeV1(0.0)
     body.core_v1.back.attachment.front.attachment.right.attachment = BrickV1(0.0)
+
+    return body
+
+
+def big_gecko_v1() -> BodyV1:
+    """
+    Get the big gecko modular robot.
+
+    A gecko with longer legs (2 hinges per leg) and a longer spine (4 hinges).
+    Each leg: hinge -> brick -> hinge -> brick (foot)
+    Spine: 4 hinges in sequence connecting front and rear sections.
+
+    Total: 12 active hinges (4 legs x 2 hinges + 4 spine hinges).
+
+    :returns: the robot.
+    """
+    body = BodyV1()
+
+    # Front left leg (2 hinges)
+    body.core_v1.left = ActiveHingeV1(0.0)
+    body.core_v1.left.attachment = BrickV1(0.0)
+    body.core_v1.left.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.left.attachment.front.attachment = BrickV1(0.0)
+
+    # Front right leg (2 hinges)
+    body.core_v1.right = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment = BrickV1(0.0)
+    body.core_v1.right.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment.front.attachment = BrickV1(0.0)
+
+    # Spine: 4 hinges
+    body.core_v1.back = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.back.attachment.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment = BrickV1(-np.pi / 2.0)
+
+    # Rear left leg (2 hinges)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.left = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.left.attachment = BrickV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.left.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.left.attachment.front.attachment = BrickV1(0.0)
+
+    # Rear right leg (2 hinges)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.right = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.right.attachment = BrickV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.right.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.right.attachment.front.attachment = BrickV1(0.0)
 
     return body
 
@@ -972,10 +1071,14 @@ def get(name: str) -> BodyV1:
     match name:
         case "gecko":
             return gecko_v1()
+        case "big_gecko":
+            return big_gecko_v1()
         case "gecko_spider":
             return gecko_spider_v1()
         case "spider":
             return spider_v1()
+        case "big_spider":
+            return big_spider_v1()
         case "tripod":
             return tripod_v1()
         case "arachnid":
