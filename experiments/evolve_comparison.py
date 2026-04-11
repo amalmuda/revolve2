@@ -699,7 +699,7 @@ def main():
     parser = argparse.ArgumentParser(description="Unified CPG evolution for comparison experiments")
 
     parser.add_argument("--robot", type=str, required=True,
-                        choices=["spider", "big_spider", "gecko", "big_gecko", "gecko_spider", "mantis", "hydra", "queen", "salamander", "pentapod"],
+                        choices=["spider", "big_spider", "gecko", "big_gecko", "gecko_spider", "mantis", "hydra", "queen", "salamander", "pentapod", "zappa", "blokky", "ant", "babya", "babyb", "garrix", "insect", "linkin", "longleg", "park", "penguin", "snake", "squarish", "stingray", "tinlicker", "turtle", "ww", "arachnid", "tripod"],
                         help="Robot name")
     parser.add_argument("--controller", type=str, required=True,
                         choices=["ode_cpg"],
