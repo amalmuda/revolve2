@@ -433,6 +433,38 @@ def identify_geometry_types(model: mujoco.MjModel) -> tuple[set[int], set[int], 
     # Leaf bodies = robot bodies that are NOT parents of any other body
     leaf_body_ids = robot_body_ids - parent_bodies
 
+    # Find which robot bodies have a hinge joint (i.e. are active hinges)
+    bodies_with_hinge = set()
+    for j in range(model.njnt):
+        if model.jnt_type[j] == mujoco.mjtJoint.mjJNT_HINGE:
+            bodies_with_hinge.add(model.jnt_bodyid[j])
+
+    def has_hinge_in_chain(body_id):
+        """Walk up the body tree (including self); return True if any body has a hinge."""
+        cur = body_id
+        while cur != 0 and cur in robot_body_ids:
+            if cur in bodies_with_hinge:
+                return True
+            cur = model.body_parentid[cur]
+        return False
+
+    # Mark bodies that have a hinge DESCENDANT (not self)
+    # For each hinge body, walk up and mark all ancestors
+    has_hinge_below = set()
+    for hinge_body in bodies_with_hinge:
+        cur = model.body_parentid[hinge_body]
+        while cur != 0 and cur in robot_body_ids:
+            has_hinge_below.add(cur)
+            cur = model.body_parentid[cur]
+
+    # Foot = any robot body that:
+    # 1. Has a hinge in its chain (self or ancestor) — it's part of a limb, not body
+    # 2. Has NO hinge descendant — it's after the last joint (the foot segment)
+    foot_body_ids = set()
+    for b in robot_body_ids:
+        if has_hinge_in_chain(b) and b not in has_hinge_below:
+            foot_body_ids.add(b)
+
     # Identify geometries
     for i in range(model.ngeom):
         geom_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i)
@@ -448,8 +480,8 @@ def identify_geometry_types(model: mujoco.MjModel) -> tuple[set[int], set[int], 
         # Check if it's a robot geometry (part of multi-body system)
         elif geom_name and "mbs" in geom_name:
             robot_geom_ids.add(i)
-            # Foot geometries belong to leaf bodies
-            if geom_body_id in leaf_body_ids:
+            # Foot geometries: on bodies after the last hinge (no hinge descendant)
+            if geom_body_id in foot_body_ids:
                 foot_geom_ids.add(i)
 
     return ground_geom_ids, robot_geom_ids, foot_geom_ids

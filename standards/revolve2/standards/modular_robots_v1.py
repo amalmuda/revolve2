@@ -268,6 +268,114 @@ def gecko_v1() -> BodyV1:
     return body
 
 
+def xbot_v1() -> BodyV1:
+    """
+    Get the X-bot modular robot.
+
+    An asymmetric "skewed lizard" with mixed limb sizes:
+    - Right: 1-hinge stub (just a hip)
+    - Front: 3-hinge feeler (hip + knee + ankle)
+    - Back: 4-hinge spine ending in a T-junction
+    - End-T left: 1-hinge stub
+    - End-T right: 3-hinge tail (hip + knee + ankle)
+
+    No left limb from core. 4 limbs of mixed sizes (1, 3, 1, 3).
+    Total: 12 active hinges. BLF should detect 4-hinge spine + 4 limbs.
+
+    :returns: the robot.
+    """
+    body = BodyV1()
+
+    # Right: 1-hinge stub
+    body.core_v1.right = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.right.attachment = BrickV1(0.0)
+
+    # Front: 3-hinge feeler (hip + knee + ankle)
+    body.core_v1.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.front.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.front.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.front.attachment.front.attachment = BrickV1(0.0)
+    body.core_v1.front.attachment.front.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.front.attachment.front.attachment.front.attachment = BrickV1(0.0)
+
+    # Back spine: 4 hinges
+    body.core_v1.back = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.back.attachment.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment = BrickV1(-np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment = BrickV1(-np.pi / 2.0)
+
+    # End T-junction: left stub and right 3-hinge tail
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.left = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.left.attachment = BrickV1(0.0)
+
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.right = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.right.attachment = BrickV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.right.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.right.attachment.front.attachment = BrickV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.right.attachment.front.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.attachment.front.attachment.front.attachment.front.attachment.right.attachment.front.attachment.front.attachment = BrickV1(0.0)
+
+    return body
+
+
+def hexapod_v1() -> BodyV1:
+    """
+    Get the hexapod modular robot.
+
+    A 6-legged insect-like robot with:
+    - 2 middle legs attached directly to the core
+    - 2 front legs attached to a front body extension brick
+    - 2 rear legs attached to a back body extension brick
+
+    Each leg: hinge -> brick -> hinge -> brick (foot)
+    Total: 12 active hinges, 27 modules.
+
+    :returns: the robot.
+    """
+    body = BodyV1()
+
+    # Middle leg pair (attached directly to core)
+    body.core_v1.left = ActiveHingeV1(0.0)
+    body.core_v1.left.attachment = BrickV1(0.0)
+    body.core_v1.left.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.left.attachment.front.attachment = BrickV1(0.0)
+
+    body.core_v1.right = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment = BrickV1(0.0)
+    body.core_v1.right.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment.front.attachment = BrickV1(0.0)
+
+    # Front body extension brick with front leg pair
+    body.core_v1.front = BrickV1(0.0)
+    body.core_v1.front.left = ActiveHingeV1(0.0)
+    body.core_v1.front.left.attachment = BrickV1(0.0)
+    body.core_v1.front.left.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.front.left.attachment.front.attachment = BrickV1(0.0)
+
+    body.core_v1.front.right = ActiveHingeV1(0.0)
+    body.core_v1.front.right.attachment = BrickV1(0.0)
+    body.core_v1.front.right.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.front.right.attachment.front.attachment = BrickV1(0.0)
+
+    # Back body extension brick with rear leg pair
+    body.core_v1.back = BrickV1(0.0)
+    body.core_v1.back.left = ActiveHingeV1(0.0)
+    body.core_v1.back.left.attachment = BrickV1(0.0)
+    body.core_v1.back.left.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.left.attachment.front.attachment = BrickV1(0.0)
+
+    body.core_v1.back.right = ActiveHingeV1(0.0)
+    body.core_v1.back.right.attachment = BrickV1(0.0)
+    body.core_v1.back.right.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.back.right.attachment.front.attachment = BrickV1(0.0)
+
+    return body
+
+
 def big_gecko_v1() -> BodyV1:
     """
     Get the big gecko modular robot.
@@ -1079,6 +1187,10 @@ def get(name: str) -> BodyV1:
             return spider_v1()
         case "big_spider":
             return big_spider_v1()
+        case "hexapod":
+            return hexapod_v1()
+        case "xbot":
+            return xbot_v1()
         case "tripod":
             return tripod_v1()
         case "arachnid":
