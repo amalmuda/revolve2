@@ -30,10 +30,13 @@ from revolve2.simulation.scene.vector2 import Vector2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from contact_detection import (
     active_hinges_to_cpg_network_structure_fully_connected,
+    active_hinges_to_cpg_network_structure_blf,
+    active_hinges_to_cpg_network_structure_internal_only,
     get_robot_core_body_id,
     identify_geometry_types,
     get_contacts_with_ground,
 )
+from revolve2.modular_robot.brain.cpg import active_hinges_to_cpg_network_structure_neighbor
 
 
 FC_LOCAL = os.path.expanduser(
@@ -59,11 +62,20 @@ def quaternion_to_roll_pitch_degrees(quat):
     return roll_deg, pitch_deg
 
 
-def compute_all(robot_name, params_path, simulation_time=30.0):
+def compute_all(robot_name, params_path, simulation_time=30.0, coupling="fully_connected"):
     """Returns (balance, hhs, em, distance, dragging)."""
     body = modular_robots_v1.get(robot_name)
     active_hinges = body.find_modules_of_type(ActiveHinge)
-    cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_fully_connected(active_hinges)
+    if coupling == "fully_connected":
+        cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_fully_connected(active_hinges)
+    elif coupling == "blf":
+        cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_blf(active_hinges, body)
+    elif coupling == "uncoupled":
+        cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_internal_only(active_hinges)
+    elif coupling == "neighbor":
+        cpg_structure, output_mapping = active_hinges_to_cpg_network_structure_neighbor(active_hinges)
+    else:
+        raise ValueError(f"Unknown coupling: {coupling}")
 
     params = np.load(params_path)
     brain = BrainCpgNetworkStatic.uniform_from_params(
