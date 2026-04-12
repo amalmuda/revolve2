@@ -405,9 +405,12 @@ def identify_geometry_types(model: mujoco.MjModel) -> tuple[set[int], set[int], 
     """
     Identify ground, robot, and foot geometries in the MuJoCo model.
 
-    Ground geometries are typically planes or heightmaps at z=0.
-    Robot geometries are all other non-static geometries.
-    Foot geometries are identified as leaf bodies (bodies with no children).
+    Ground geometries are planes or heightmaps.
+    Robot geometries are identified by 'mbs' in their body name.
+    Foot geometries are bodies that have a hinge in their ancestor chain
+    (i.e. part of a limb) AND have no hinge descendant (i.e. everything
+    after the last hinge in a chain). This means a blob of bricks hanging
+    off the final hinge is entirely considered foot.
 
     :param model: The MuJoCo model.
     :returns: Tuple of (ground_geom_ids, robot_geom_ids, foot_geom_ids).
