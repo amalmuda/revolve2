@@ -1,15 +1,22 @@
 """
 Body/Limb Finder (BLF) for Revolve2 modular robots.
 
-Based on the paper:
-"Automatic generation of reduced CPG control networks for locomotion of arbitrary modular robot structures"
-by Bonardi et al. (EPFL Biorobotics Laboratory)
+Adapted from:
+"Automatic generation of reduced CPG control networks for locomotion of
+arbitrary modular robot structures" by Bonardi et al. (2014, EPFL)
 
-This module implements:
-1. Graph representation of robot morphology
-2. Bi-connected component detection for body/limb identification
-3. Joint type classification (spine, hip, knee, ankle)
-4. Reduced CPG network generation based on bio-inspired patterns
+Modified for tree-structured bodies in Revolve2:
+- Core is always body (rule 1).
+- Brick clusters with >2 hinges directly touching them are body (rule 2).
+  This replaces Bonardi's articulation-point approach with a simpler rule
+  that identifies junction points where multiple branches meet.
+- Modules on the path between body regions are body (rule 3).
+- All body hinges are spine (no locking, unlike Bonardi who activates only 1).
+- First hinge in each limb = hip, all remaining = knee (no ankle distinction).
+- Spine coupling: all-to-all. Hip coupling: all-to-all + nearest spine(s).
+  Knee coupling: chain within limb (each connects to previous hinge).
+
+See blf_rules.md for the full rule description.
 """
 
 from __future__ import annotations
@@ -17,8 +24,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING
-
-import numpy as np
 
 from revolve2.modular_robot.body.base import ActiveHinge, Body, Core
 from revolve2.modular_robot.body._module import Module
@@ -38,7 +43,6 @@ class JointType(Enum):
     SPINE = auto()
     HIP = auto()
     KNEE = auto()
-    ANKLE = auto()
     UNCLASSIFIED = auto()
 
 
@@ -62,38 +66,6 @@ class Node:
     limb_id: int = -1  # Which limb this node belongs to (-1 = body)
     distance_from_body: int = -1  # Distance from body (for limb nodes)
 
-
-@dataclass
-class AmplitudeBounds:
-    """Amplitude boundaries for each joint type (from paper Table I)."""
-
-    # Values in radians
-    SPINE_MIN: float = 0.0
-    SPINE_MAX: float = 2 * np.pi / 3  # 2π/3
-
-    HIP_MIN: float = 0.0
-    HIP_MAX: float = np.pi / 2  # π/2
-
-    KNEE_MIN: float = 0.0
-    KNEE_MAX: float = np.pi / 6  # π/6
-
-    ANKLE_MIN: float = 0.0
-    ANKLE_MAX: float = np.pi / 6  # π/6
-
-    @classmethod
-    def get_bounds(cls, joint_type: JointType) -> tuple[float, float]:
-        """Get amplitude bounds for a joint type."""
-        if joint_type == JointType.SPINE:
-            return (cls.SPINE_MIN, cls.SPINE_MAX)
-        elif joint_type == JointType.HIP:
-            return (cls.HIP_MIN, cls.HIP_MAX)
-        elif joint_type == JointType.KNEE:
-            return (cls.KNEE_MIN, cls.KNEE_MAX)
-        elif joint_type == JointType.ANKLE:
-            return (cls.ANKLE_MIN, cls.ANKLE_MAX)
-        else:
-            # Default: full range
-            return (0.0, np.pi)
 
 
 @dataclass
@@ -124,7 +96,7 @@ class BodyLimbFinder:
 
     Analyzes a modular robot structure to identify:
     - Body vs limb modules
-    - Joint types (spine, hip, knee, ankle)
+    - Joint types (spine, hip, knee)
     - Symmetries between limbs
     """
 
@@ -143,16 +115,23 @@ class BodyLimbFinder:
         """
         Run the full BLF analysis.
 
+        Rules (adapted from Bonardi et al. 2014 for tree-structured bodies):
+        1. Core is always body.
+        2. Brick clusters with more than 2 hinges directly touching them are body
+           (they are junction points where multiple limbs/branches meet).
+        3. Modules on the path between body regions are body.
+        4. Everything else is a limb.
+        5. Body hinges = spine (all-to-all coupling).
+        6. First hinge in limb = hip (all-to-all + nearest spine).
+        7. Remaining hinges in limb = knee (chained to previous hinge).
+
         :returns: The BLF analysis result.
         """
         # Step 1: Build graph from robot
         self._build_graph()
 
-        # Step 2: Find bi-connected components
-        articulation_points = self._find_articulation_points()
-
-        # Step 3: Identify body and limbs
-        body_nodes, limbs = self._find_body_and_limbs(articulation_points)
+        # Step 2: Identify body and limbs using brick-cluster hinge-count rule
+        body_nodes, limbs = self._find_body_and_limbs()
 
         # Step 4: Classify joints
         articulations = self._classify_joints(body_nodes, limbs)
@@ -215,89 +194,78 @@ class BodyLimbFinder:
                 if node.index not in self._nodes[parent_idx].neighbors:
                     self._nodes[parent_idx].neighbors.append(node.index)
 
-    def _find_articulation_points(self) -> set[int]:
+    def _find_body_and_limbs(self) -> tuple[list[int], list[list[int]]]:
         """
-        Find articulation points (cut vertices) in the graph.
+        Identify body and limbs using brick-cluster hinge-count rules.
 
-        An articulation point is a vertex whose removal disconnects the graph.
+        Rules:
+        1. Core is always body.
+        2. A connected group of non-hinge modules (brick cluster) is body
+           if more than 2 active hinges are directly attached to it.
+           This identifies junction points between multiple limbs/branches.
+        3. All modules on the shortest path between two body regions are body.
+           This captures spine hinges and intermediate bricks.
+        4. Everything not classified as body is a limb.
 
-        :returns: Set of node indices that are articulation points.
-        """
-        n = len(self._nodes)
-        if n == 0:
-            return set()
-
-        visited = [False] * n
-        disc = [0] * n  # Discovery time
-        low = [0] * n  # Lowest discovery time reachable
-        parent = [-1] * n
-        articulation_points: set[int] = set()
-        time = [0]
-
-        def dfs(u: int) -> None:
-            children = 0
-            visited[u] = True
-            disc[u] = low[u] = time[0]
-            time[0] += 1
-
-            for v in self._nodes[u].neighbors:
-                if not visited[v]:
-                    children += 1
-                    parent[v] = u
-                    dfs(v)
-                    low[u] = min(low[u], low[v])
-
-                    # u is articulation point if:
-                    # 1. u is root and has 2+ children
-                    # 2. u is not root and low[v] >= disc[u]
-                    if parent[u] == -1 and children > 1:
-                        articulation_points.add(u)
-                    if parent[u] != -1 and low[v] >= disc[u]:
-                        articulation_points.add(u)
-                elif v != parent[u]:
-                    low[u] = min(low[u], disc[v])
-
-        # Run DFS from node 0 (core)
-        dfs(0)
-
-        return articulation_points
-
-    def _find_body_and_limbs(
-        self, articulation_points: set[int]
-    ) -> tuple[list[int], list[list[int]]]:
-        """
-        Identify body and limbs based on articulation points.
-
-        The body is the set of nodes whose removal leads to multiple disconnected components.
-        Limbs are the connected components after removing the body.
-
-        :param articulation_points: Set of articulation point indices.
         :returns: Tuple of (body node indices, list of limb node lists).
         """
         n = len(self._nodes)
 
-        # Find nodes with high "clustering power" (their removal creates many components)
+        # Rule 1: Core is always body
         body_nodes: list[int] = []
-
-        # Core is always part of body
         core_idx = 0  # Core is always first node
         body_nodes.append(core_idx)
         self._nodes[core_idx].part_type = PartType.BODY
 
-        # Articulation points connected to core are body
-        for ap in articulation_points:
-            if ap == core_idx:  # Skip core, already added
+        # Rule 2: Find brick clusters with more than 2 hinges touching them.
+        # A brick cluster is a connected group of non-hinge modules (excluding core).
+        # If >2 hinges are direct neighbors of the cluster, it's a junction -> body.
+        visited_for_clusters: set[int] = set()
+        for start_idx in range(n):
+            if start_idx in visited_for_clusters:
                 continue
-            # Check clustering power: how many components after removal?
-            components = self._count_components_without(ap)
-            if components > 2:
-                body_nodes.append(ap)
-                self._nodes[ap].part_type = PartType.BODY
+            node = self._nodes[start_idx]
+            # Skip hinges and core (core is already body)
+            if isinstance(node.module, ActiveHinge) or isinstance(node.module, Core):
+                continue
 
-        # Include all nodes on shortest paths between body nodes.
-        # This captures spine joints that lie between the core and
-        # branching points (they only split the graph into 2 components
-        # so they aren't caught by the clustering power check above).
+            # BFS to find connected brick cluster
+            cluster: list[int] = []
+            cluster_queue = [start_idx]
+            while cluster_queue:
+                idx = cluster_queue.pop(0)
+                if idx in visited_for_clusters:
+                    continue
+                cur_node = self._nodes[idx]
+                if isinstance(cur_node.module, ActiveHinge) or isinstance(cur_node.module, Core):
+                    continue
+                visited_for_clusters.add(idx)
+                cluster.append(idx)
+                for neighbor in cur_node.neighbors:
+                    if neighbor not in visited_for_clusters:
+                        cluster_queue.append(neighbor)
+
+            if not cluster:
+                continue
+
+            # Count how many hinges directly touch this cluster
+            cluster_set = set(cluster)
+            touching_hinges: set[int] = set()
+            for cidx in cluster:
+                for neighbor in self._nodes[cidx].neighbors:
+                    if isinstance(self._nodes[neighbor].module, ActiveHinge):
+                        touching_hinges.add(neighbor)
+
+            # More than 2 hinges = junction point = body
+            if len(touching_hinges) > 2:
+                for cidx in cluster:
+                    if cidx not in body_nodes:
+                        body_nodes.append(cidx)
+                        self._nodes[cidx].part_type = PartType.BODY
+
+        # Rule 3: Include all modules on shortest paths between body regions.
+        # This captures spine hinges and bricks connecting the core to
+        # distant body brick clusters.
         if len(body_nodes) > 1:
             body_set = set(body_nodes)
             for i_b in range(len(body_nodes)):
@@ -347,34 +315,6 @@ class BodyLimbFinder:
             self._calculate_distances_from_body(limb, body_nodes)
 
         return body_nodes, limbs
-
-    def _count_components_without(self, exclude_idx: int) -> int:
-        """
-        Count connected components if node exclude_idx is removed.
-
-        :param exclude_idx: Node index to exclude.
-        :returns: Number of connected components.
-        """
-        n = len(self._nodes)
-        visited = [False] * n
-        visited[exclude_idx] = True
-        components = 0
-
-        for start in range(n):
-            if visited[start]:
-                continue
-            components += 1
-            queue = [start]
-            while queue:
-                idx = queue.pop(0)
-                if visited[idx]:
-                    continue
-                visited[idx] = True
-                for neighbor in self._nodes[idx].neighbors:
-                    if not visited[neighbor]:
-                        queue.append(neighbor)
-
-        return components
 
     def _find_shortest_path(self, src: int, dst: int) -> list[int]:
         """
@@ -444,28 +384,29 @@ class BodyLimbFinder:
         self, body_nodes: list[int], limbs: list[list[int]]
     ) -> dict[int, JointType]:
         """
-        Classify joints according to bio-inspired rules.
+        Classify active hinges by their role in the robot.
 
-        Rules from the paper:
-        - Spine: joints inside the linear part of the body
-        - Hip: joint at frontier between limb and body
-        - Knee: joint at center of limb
-        - Ankle: joint between knee and foot
+        Rules:
+        - Spine: any active hinge classified as body (connects body regions).
+        - Hip: the first (closest to body) active hinge in each limb.
+        - Knee: all remaining active hinges after the hip in a limb.
+          No ankle distinction — coupling within a limb is always a chain
+          (each knee connects to the previous hinge), so the label doesn't
+          change the coupling structure.
 
         :param body_nodes: List of body node indices.
         :param limbs: List of limbs (each limb is list of node indices).
         :returns: Dictionary mapping node index to joint type.
         """
         articulations: dict[int, JointType] = {}
-        body_set = set(body_nodes)
 
-        # Classify body joints as SPINE (if they are ActiveHinges)
+        # All body hinges are spine
         for idx in body_nodes:
             if isinstance(self._nodes[idx].module, ActiveHinge):
                 articulations[idx] = JointType.SPINE
                 self._nodes[idx].joint_type = JointType.SPINE
 
-        # Classify limb joints
+        # Classify limb joints: first = hip, rest = knee
         for limb in limbs:
             active_hinges_in_limb = [
                 idx for idx in limb if isinstance(self._nodes[idx].module, ActiveHinge)
@@ -484,17 +425,10 @@ class BodyLimbFinder:
             articulations[hip_idx] = JointType.HIP
             self._nodes[hip_idx].joint_type = JointType.HIP
 
-            if len(active_hinges_in_limb) >= 2:
-                # Last ActiveHinge = ANKLE (or closest to foot)
-                ankle_idx = active_hinges_in_limb[-1]
-                articulations[ankle_idx] = JointType.ANKLE
-                self._nodes[ankle_idx].joint_type = JointType.ANKLE
-
-            if len(active_hinges_in_limb) >= 3:
-                # Middle ActiveHinge(s) = KNEE
-                for idx in active_hinges_in_limb[1:-1]:
-                    articulations[idx] = JointType.KNEE
-                    self._nodes[idx].joint_type = JointType.KNEE
+            # All remaining = KNEE (no ankle distinction)
+            for idx in active_hinges_in_limb[1:]:
+                articulations[idx] = JointType.KNEE
+                self._nodes[idx].joint_type = JointType.KNEE
 
         return articulations
 
@@ -568,14 +502,9 @@ class BLFCpgNetworkGenerator:
     Generate reduced CPG networks based on BLF analysis.
 
     Creates CPG coupling patterns inspired by vertebrate locomotion:
-    - Spine oscillators are fully coupled
-    - Hip oscillators are fully coupled and connected to spine
-    - Knee oscillators are coupled to corresponding hip
-    - Ankle oscillators are coupled to corresponding knee
-
-    Supports two modes:
-    - BLF: Basic reduced network
-    - BLF-SYM: Reduced network with symmetry constraints
+    - Spine oscillators are fully coupled (all-to-all)
+    - Hip oscillators are fully coupled (all-to-all) and connected to nearest spine(s)
+    - Knee oscillators are chained within their limb (each to previous hinge)
     """
 
     def __init__(self, blf_result: BLFResult, use_symmetry: bool = False) -> None:
@@ -604,7 +533,6 @@ class BLFCpgNetworkGenerator:
             JointType.SPINE: [],
             JointType.HIP: [],
             JointType.KNEE: [],
-            JointType.ANKLE: [],
         }
 
         for idx in self._result.active_hinge_nodes:
@@ -617,7 +545,7 @@ class BLFCpgNetworkGenerator:
         cpg_list: list[Cpg] = []
         node_to_cpg: dict[int, Cpg] = {}
 
-        for jtype in [JointType.SPINE, JointType.HIP, JointType.KNEE, JointType.ANKLE]:
+        for jtype in [JointType.SPINE, JointType.HIP, JointType.KNEE]:
             for node_idx in classified_hinges[jtype]:
                 cpg = Cpg(len(cpg_list))
                 cpg_list.append(cpg)
@@ -639,62 +567,53 @@ class BLFCpgNetworkGenerator:
             for cpg2 in hip_cpgs[i + 1 :]:
                 connections.add(CpgPair(cpg1, cpg2))
 
-        # 3. Hip connected to nearest spine (BFS through graph)
+        # 3. Hip connected to nearest spine (BFS through graph).
+        #    If a hip is equidistant to multiple spines, connect to all of them.
         if spine_cpgs:
+            from collections import deque
             spine_node_set = set(classified_hinges[JointType.SPINE])
             for hip_idx in classified_hinges[JointType.HIP]:
                 hip_cpg = node_to_cpg[hip_idx]
-                # BFS from hip to find nearest spine node
-                from collections import deque
+                # BFS from hip to find ALL nearest spine nodes at the same distance
                 bfs_queue = deque([(hip_idx, 0)])
                 bfs_visited = {hip_idx}
-                nearest_spine_idx = None
+                nearest_spines: list[int] = []
+                nearest_dist: int | None = None
                 while bfs_queue:
                     current, dist = bfs_queue.popleft()
-                    if current in spine_node_set:
-                        nearest_spine_idx = current
+                    # If we already found nearest spines and current is further, stop
+                    if nearest_dist is not None and dist > nearest_dist:
                         break
+                    if current in spine_node_set:
+                        nearest_spines.append(current)
+                        nearest_dist = dist
                     for neighbor in self._result.nodes[current].neighbors:
                         if neighbor not in bfs_visited:
                             bfs_visited.add(neighbor)
                             bfs_queue.append((neighbor, dist + 1))
-                if nearest_spine_idx is not None:
-                    connections.add(CpgPair(hip_cpg, node_to_cpg[nearest_spine_idx]))
+                for spine_idx in nearest_spines:
+                    connections.add(CpgPair(hip_cpg, node_to_cpg[spine_idx]))
 
-        # 4. Knee connected to corresponding hip (same limb)
-        for knee_idx in classified_hinges[JointType.KNEE]:
-            knee_node = self._result.nodes[knee_idx]
-            limb_id = knee_node.limb_id
-
-            # Find hip in same limb
-            for hip_idx in classified_hinges[JointType.HIP]:
-                hip_node = self._result.nodes[hip_idx]
-                if hip_node.limb_id == limb_id:
-                    connections.add(CpgPair(node_to_cpg[knee_idx], node_to_cpg[hip_idx]))
-                    break
-
-        # 5. Ankle connected to corresponding knee (same limb)
-        for ankle_idx in classified_hinges[JointType.ANKLE]:
-            ankle_node = self._result.nodes[ankle_idx]
-            limb_id = ankle_node.limb_id
-
-            # Find knee in same limb
-            for knee_idx in classified_hinges[JointType.KNEE]:
-                knee_node = self._result.nodes[knee_idx]
-                if knee_node.limb_id == limb_id:
-                    connections.add(
-                        CpgPair(node_to_cpg[ankle_idx], node_to_cpg[knee_idx])
-                    )
-                    break
-            else:
-                # No knee, connect to hip
-                for hip_idx in classified_hinges[JointType.HIP]:
-                    hip_node = self._result.nodes[hip_idx]
-                    if hip_node.limb_id == limb_id:
-                        connections.add(
-                            CpgPair(node_to_cpg[ankle_idx], node_to_cpg[hip_idx])
-                        )
-                        break
+        # 4. Knee coupling: chain within each limb.
+        #    Each knee connects to the previous hinge (closer to body) in the
+        #    same limb, forming: hip <- knee1 <- knee2 <- knee3 ...
+        for limb in self._result.limbs:
+            hinges_in_limb = [
+                idx for idx in limb
+                if isinstance(self._result.nodes[idx].module, ActiveHinge)
+            ]
+            if len(hinges_in_limb) < 2:
+                continue
+            # Sort by distance from body (hip first, then knees in order)
+            hinges_in_limb.sort(
+                key=lambda x: self._result.nodes[x].distance_from_body
+            )
+            # Chain: each hinge connects to the one before it
+            for i in range(1, len(hinges_in_limb)):
+                connections.add(CpgPair(
+                    node_to_cpg[hinges_in_limb[i]],
+                    node_to_cpg[hinges_in_limb[i - 1]],
+                ))
 
         structure = CpgNetworkStructure(cpg_list, connections)
 
@@ -731,7 +650,7 @@ class BLFCpgNetworkGenerator:
 
         for sym_group in self._result.symmetric_groups:
             # For each joint type, group the CPGs from symmetric limbs
-            for jtype in [JointType.HIP, JointType.KNEE, JointType.ANKLE]:
+            for jtype in [JointType.HIP, JointType.KNEE]:
                 cpg_group: list[int] = []
                 for limb_idx in sym_group:
                     limb = self._result.limbs[limb_idx]
@@ -743,59 +662,6 @@ class BLFCpgNetworkGenerator:
                     groups.append(cpg_group)
 
         return groups
-
-    def get_amplitude_bounds(self) -> list[tuple[float, float]]:
-        """
-        Get amplitude bounds for each CPG based on joint type.
-
-        :returns: List of (min, max) tuples for each CPG.
-        """
-        bounds = []
-        for cpg_idx in range(len(self._active_hinges)):
-            node_idx = self._cpg_to_node.get(cpg_idx)
-            if node_idx is not None:
-                node = self._result.nodes[node_idx]
-                bounds.append(AmplitudeBounds.get_bounds(node.joint_type))
-            else:
-                bounds.append((0.0, np.pi))  # Default
-        return bounds
-
-    def get_full_parameter_bounds(
-        self,
-        num_connections: int,
-        external_weight_bounds: tuple[float, float] = (-1.0, 1.0),
-    ) -> tuple[list[float], list[float]]:
-        """
-        Get bounds for all CPG parameters (internal + external weights).
-
-        The parameter vector structure is:
-        - First num_cpgs params: internal weights (amplitude) with joint-type specific bounds
-        - Remaining params: external weights (coupling) with uniform bounds
-
-        :param num_connections: Total number of connections (num_cpgs + num_pairs).
-        :param external_weight_bounds: Bounds for external coupling weights.
-        :returns: Tuple of (lower_bounds, upper_bounds) lists.
-        """
-        num_cpgs = len(self._active_hinges)
-        num_external = num_connections - num_cpgs
-
-        # Get amplitude bounds for internal weights
-        amplitude_bounds = self.get_amplitude_bounds()
-
-        lower_bounds = []
-        upper_bounds = []
-
-        # Internal weights (amplitude) - joint-type specific
-        for lo, hi in amplitude_bounds:
-            lower_bounds.append(lo)
-            upper_bounds.append(hi)
-
-        # External weights (coupling) - uniform bounds
-        for _ in range(num_external):
-            lower_bounds.append(external_weight_bounds[0])
-            upper_bounds.append(external_weight_bounds[1])
-
-        return lower_bounds, upper_bounds
 
     def get_symmetric_groups(self) -> list[list[int]]:
         """
@@ -854,8 +720,8 @@ class BLFCpgNetworkGenerator:
         offset (the phase shift remaining open to avoid restricting the
         possible gait patterns)" - Section III.C
 
-        For spider (4 symmetric legs, each with HIP+ANKLE):
-        - 2 unique internal params (1 hip amplitude, 1 ankle amplitude)
+        For spider (4 symmetric legs, each with HIP+KNEE):
+        - 2 unique internal params (1 hip amplitude, 1 knee amplitude)
         - 10 independent external params (all couplings independent for gait flexibility)
         = 12 total unique params instead of 18
 
@@ -914,12 +780,10 @@ class BLFCpgNetworkGenerator:
         lower_bounds: list[float] = []
         upper_bounds: list[float] = []
 
-        # Internal bounds (from joint-type specific amplitude bounds)
-        amplitude_bounds = self.get_amplitude_bounds()
+        # Internal bounds (uniform [-1, 1] — same as CMA-ES weight bounds)
         for cpg_idx in unique_internal_params:
-            lo, hi = amplitude_bounds[cpg_idx]
-            lower_bounds.append(lo)
-            upper_bounds.append(hi)
+            lower_bounds.append(external_weight_bounds[0])
+            upper_bounds.append(external_weight_bounds[1])
 
         # External bounds (uniform) - all connections independent
         for _ in range(num_external):
@@ -987,7 +851,7 @@ def get_blf_parameter_bounds(
     Uses joint-type specific amplitude bounds from the paper:
     - SPINE: [0, 2π/3] rad
     - HIP: [0, π/2] rad
-    - KNEE/ANKLE: [0, π/6] rad
+    - KNEE: [0, π/6] rad
 
     External coupling weights use uniform bounds.
 
@@ -1000,6 +864,9 @@ def get_blf_parameter_bounds(
     """
     structure, mapping, result, generator = generate_blf_cpg_network(body, use_symmetry)
 
+    num_cpgs = len(mapping)
+    num_external = structure.num_connections - num_cpgs
+
     if use_symmetry:
         # Return reduced bounds for unique parameters only
         info = generator.get_reduced_parameter_info(
@@ -1008,10 +875,10 @@ def get_blf_parameter_bounds(
         )
         return info["lower_bounds"], info["upper_bounds"]
     else:
-        return generator.get_full_parameter_bounds(
-            num_connections=structure.num_connections,
-            external_weight_bounds=external_weight_bounds,
-        )
+        # Uniform bounds for all params (internal + external)
+        lower = [external_weight_bounds[0]] * structure.num_connections
+        upper = [external_weight_bounds[1]] * structure.num_connections
+        return lower, upper
 
 
 def get_blf_symmetry_expansion_info(
@@ -1107,10 +974,9 @@ def print_blf_analysis(result: BLFResult) -> None:
             print(f"    [{idx}] {module_type} (dist={dist}, joint={joint})")
 
     print("\n--- Joint Classification ---")
-    for jtype in [JointType.SPINE, JointType.HIP, JointType.KNEE, JointType.ANKLE]:
+    for jtype in [JointType.SPINE, JointType.HIP, JointType.KNEE]:
         joints = [idx for idx, jt in result.articulations.items() if jt == jtype]
-        bounds = AmplitudeBounds.get_bounds(jtype)
-        print(f"  {jtype.name}: {joints}  (amplitude: [{bounds[0]:.2f}, {bounds[1]:.2f}] rad)")
+        print(f"  {jtype.name}: {joints}")
 
     print("\n--- Symmetric Limb Groups ---")
     if result.symmetric_groups:
@@ -1166,7 +1032,6 @@ def compare_network_sizes(body: Body) -> dict:
             "spine": len([i for i, j in result.articulations.items() if j == JointType.SPINE]),
             "hip": len([i for i, j in result.articulations.items() if j == JointType.HIP]),
             "knee": len([i for i, j in result.articulations.items() if j == JointType.KNEE]),
-            "ankle": len([i for i, j in result.articulations.items() if j == JointType.ANKLE]),
         },
     }
 
@@ -1180,22 +1045,22 @@ def print_comparison_table(robots: dict[str, Body]) -> None:
     print("\n" + "=" * 95)
     print("Network Size Comparison: Full Neighbor vs BLF vs BLF-SYM")
     print("=" * 95)
-    print(f"{'Robot':<12} {'Hinges':>6} {'Full':>8} {'BLF':>8} {'BLF-SYM':>8} {'SymGrps':>7} {'Limbs':>6} {'H/K/A':>10}")
+    print(f"{'Robot':<12} {'Hinges':>6} {'Full':>8} {'BLF':>8} {'BLF-SYM':>8} {'SymGrps':>7} {'Limbs':>6} {'S/H/K':>10}")
     print("-" * 95)
 
     for name, body in robots.items():
         stats = compare_network_sizes(body)
         jc = stats["joint_counts"]
-        hka = f"{jc['hip']}/{jc['knee']}/{jc['ankle']}"
+        shk = f"{jc['spine']}/{jc['hip']}/{jc['knee']}"
         print(
             f"{name:<12} {stats['num_hinges']:>6} "
             f"{stats['full_params']:>8} {stats['blf_params']:>8} "
             f"{stats['blf_sym_params']:>8} {stats['num_symmetric_groups']:>7} "
-            f"{stats['num_limbs']:>6} {hka:>10}"
+            f"{stats['num_limbs']:>6} {shk:>10}"
         )
 
     print("=" * 95)
-    print("H/K/A = Hip/Knee/Ankle joint counts | SymGrps = Symmetric limb groups")
+    print("S/H/K = Spine/Hip/Knee joint counts | SymGrps = Symmetric limb groups")
 
 
 # Test function
@@ -1233,12 +1098,11 @@ if __name__ == "__main__":
     structure, mapping, _, gen = generate_blf_cpg_network(robots["spider"], use_symmetry=True)
     print(f"\nCPG Network: {structure.num_cpgs} CPGs, {len(structure.connections)} connections")
 
-    print("\nAmplitude Bounds per CPG:")
-    bounds = gen.get_amplitude_bounds()
-    for i, (lo, hi) in enumerate(bounds):
+    print("\nCPG Joint Types:")
+    for i in range(len(mapping)):
         node_idx = gen._cpg_to_node.get(i)
         jtype = result.nodes[node_idx].joint_type.name if node_idx else "?"
-        print(f"  CPG {i} ({jtype}): [{lo:.3f}, {hi:.3f}] rad")
+        print(f"  CPG {i}: {jtype}")
 
     print("\nSymmetric CPG Groups (share amplitude/offset):")
     for i, group in enumerate(gen.get_symmetric_groups()):

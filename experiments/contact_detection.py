@@ -577,11 +577,11 @@ def active_hinges_to_cpg_network_structure_blf(
     """
     Create a CPG structure using BLF (Body/Limb Finder) from the EPFL paper.
 
-    BLF automatically detects body vs limb modules, classifies joints (hip, knee, ankle),
+    BLF automatically detects body vs limb modules, classifies joints (spine, hip, knee),
     and creates bio-inspired coupling:
-    - Hip oscillators are fully coupled and connected to spine
-    - Knee oscillators are coupled to their corresponding hip
-    - Ankle oscillators are coupled to their corresponding knee (or hip if no knee)
+    - Spine oscillators are fully coupled (all-to-all)
+    - Hip oscillators are fully coupled (all-to-all) and connected to nearest spine(s)
+    - Knee oscillators are chained within their limb (each to previous hinge)
 
     :param active_hinges: The active hinges to base the structure on.
     :param body: The robot body.
