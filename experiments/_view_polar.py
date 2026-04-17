@@ -16,7 +16,11 @@ from revolve2.simulation.scene.vector2 import Vector2
 from revolve2.simulation.simulator import BatchParameters
 
 from hopf_brain import BrainHopfPolarStatic, hopf_structure_from_cpg_structure
-from contact_detection import active_hinges_to_cpg_network_structure_blf
+from contact_detection import (
+    active_hinges_to_cpg_network_structure_blf,
+    active_hinges_to_cpg_network_structure_fully_connected,
+    active_hinges_to_cpg_network_structure_internal_only,
+)
 
 ROBOT = sys.argv[1] if len(sys.argv) > 1 else "spider"
 PARAMS = sys.argv[2] if len(sys.argv) > 2 else "polar_spider_neighbor_xy_best.npy"
@@ -28,6 +32,10 @@ body = modular_robots_v1.get(ROBOT)
 hinges = body.find_modules_of_type(ActiveHinge)
 if COUPLING == "blf":
     cpg, mp = active_hinges_to_cpg_network_structure_blf(hinges, body)
+elif COUPLING == "fc":
+    cpg, mp = active_hinges_to_cpg_network_structure_fully_connected(hinges)
+elif COUPLING == "uncoupled":
+    cpg, mp = active_hinges_to_cpg_network_structure_internal_only(hinges)
 else:
     cpg, mp = active_hinges_to_cpg_network_structure_neighbor(hinges)
 hopf_struct = hopf_structure_from_cpg_structure(cpg)
