@@ -1,17 +1,38 @@
-"""
-Kuramoto oscillator brain for Revolve2.
+"""Kuramoto phase-oscillator CPG for Revolve2.
 
-Pure phase model: each active hinge controlled by one phase variable theta.
-    dtheta_i/dt = omega + sum_j K_ij * sin(theta_j - theta_i - phi_ij)
+One phase variable per active hinge. Shared fixed natural frequency.
+Per-joint amplitude and initial phase are evolved. Per-link coupling
+weight and phase offset are evolved. Frequency is decoupled from
+coupling strength by construction.
 
-Joint target = sin(theta_i) * hinge_range.
+Dynamics
+--------
+    dphi_i/dt = 2*pi*omega + sum_j K_ij * sin(phi_j - phi_i - Delta_ij)
 
-Evolved parameters (per pair):
-    K_ij   coupling weight (symmetric: K_ij = K_ji)
-    phi_ij phase offset    (antisymmetric: phi_ij = -phi_ji)
+Output
+------
+    theta_i = A_i * sin(phi_i)
 
-omega is fixed across all oscillators (not evolved). No amplitude state, no
-limit-cycle dynamics. The simplest possible coupled-oscillator CPG.
+Evolved parameters
+------------------
+    Per joint:      A_i     in [0, pi/3]       (output amplitude)
+                    phi0_i  in [0, 2*pi]       (initial phase)
+    Per link (i,j): K_ij    in [0, 2]          (coupling strength)
+                    Delta_ij in [0, 2*pi]      (target phase offset)
+
+K is symmetric (K_ji = K_ij). Delta is antisymmetric (Delta_ji = -Delta_ij).
+
+Fixed
+-----
+    omega: shared natural frequency in Hz (default 0.2).
+
+Parameter layout (flat vector of length 2n + 2*nc)
+--------------------------------------------------
+    [A_0, ..., A_{n-1}, phi0_0, ..., phi0_{n-1},
+     K_0, ..., K_{nc-1}, Delta_0, ..., Delta_{nc-1}]
+
+Link ordering is sorted by (lowest_index, highest_index) of the
+CpgPair, matching the conventions used by the Hopf brain.
 """
 from __future__ import annotations
 
@@ -34,9 +55,15 @@ from revolve2.modular_robot.brain.cpg._cpg_network_structure import (
 )
 
 
+# Defaults matching the thesis spec.
+DEFAULT_OMEGA_HZ = 0.2
+A_MAX = np.pi / 3  # 1.047 rad ~= V1 hinge range
+K_MAX = 2.0
+
+
 @dataclass
 class KuramotoNetworkStructure:
-    """Topology of a Kuramoto oscillator network. Mirrors HopfNetworkStructure."""
+    """Topology container for a Kuramoto CPG."""
 
     oscillators: list[Cpg]
     connections: set[CpgPair]
@@ -51,69 +78,73 @@ class KuramotoNetworkStructure:
 
     @property
     def num_params(self) -> int:
-        """Total evolved params = 2 per connection (weight + phase offset)."""
-        return 2 * self.num_connections
+        return 2 * self.num_oscillators + 2 * self.num_connections
 
-    def split_params(
-        self, params: Iterable[float]
-    ) -> tuple[npt.NDArray[np.float_], npt.NDArray[np.float_]]:
-        """
-        Split a flat parameter vector into (weights, phase offsets).
-
-        Layout: [w_0, ..., w_{nc-1}, phi_0, ..., phi_{nc-1}]
-        Pair ordering: sorted by (lowest_index, highest_index).
-        """
-        plist = np.asarray(list(params), dtype=float)
-        nc = self.num_connections
-        assert plist.size == 2 * nc, f"Expected {2*nc} params, got {plist.size}"
-        return plist[:nc], plist[nc:]
-
-    def build_matrices(
-        self,
-        weights: npt.NDArray[np.float_],
-        phase_offsets: npt.NDArray[np.float_],
-    ) -> tuple[npt.NDArray[np.float_], npt.NDArray[np.float_]]:
-        """
-        Build (n x n) coupling matrix K (symmetric) and phase offset matrix
-        Phi (antisymmetric). K[i, i] = 0; Phi[i, i] = 0.
-        """
-        n = self.num_oscillators
-        K = np.zeros((n, n), dtype=float)
-        Phi = np.zeros((n, n), dtype=float)
-        sorted_pairs = sorted(
+    def _sorted_pairs(self) -> list[CpgPair]:
+        return sorted(
             self.connections,
             key=lambda p: (p.cpg_index_lowest.index, p.cpg_index_highest.index),
         )
-        for k, pair in enumerate(sorted_pairs):
+
+    def split_params(
+        self, params: Iterable[float]
+    ) -> tuple[
+        npt.NDArray[np.float_],
+        npt.NDArray[np.float_],
+        npt.NDArray[np.float_],
+        npt.NDArray[np.float_],
+    ]:
+        """Split a flat parameter vector into (A, phi0, K, Delta)."""
+        plist = np.asarray(list(params), dtype=float)
+        n, nc = self.num_oscillators, self.num_connections
+        expected = 2 * n + 2 * nc
+        assert plist.size == expected, f"Expected {expected} params, got {plist.size}"
+        A = plist[:n]
+        phi0 = plist[n : 2 * n]
+        K_flat = plist[2 * n : 2 * n + nc]
+        Delta_flat = plist[2 * n + nc :]
+        return A, phi0, K_flat, Delta_flat
+
+    def build_matrices(
+        self,
+        K_flat: npt.NDArray[np.float_],
+        Delta_flat: npt.NDArray[np.float_],
+    ) -> tuple[npt.NDArray[np.float_], npt.NDArray[np.float_]]:
+        """Build (n,n) K (symmetric) and Delta (antisymmetric) matrices."""
+        n = self.num_oscillators
+        K = np.zeros((n, n), dtype=float)
+        D = np.zeros((n, n), dtype=float)
+        for k, pair in enumerate(self._sorted_pairs()):
             i = pair.cpg_index_lowest.index
             j = pair.cpg_index_highest.index
-            K[i, j] = weights[k]
-            K[j, i] = weights[k]                # symmetric
-            Phi[i, j] = phase_offsets[k]
-            Phi[j, i] = -phase_offsets[k]       # antisymmetric
-        return K, Phi
+            K[i, j] = K_flat[k]
+            K[j, i] = K_flat[k]
+            D[i, j] = Delta_flat[k]
+            D[j, i] = -Delta_flat[k]
+        return K, D
 
 
 class BrainKuramoto(Brain):
-    """Static Kuramoto brain. Coupling weights and phase offsets fixed at
-    construction time. omega is a fixed scalar shared by all oscillators."""
+    """Static Kuramoto brain. All parameters frozen at construction."""
 
     def __init__(
         self,
+        A: npt.NDArray[np.float_],
+        phi0: npt.NDArray[np.float_],
         K: npt.NDArray[np.float_],
-        Phi: npt.NDArray[np.float_],
-        omega: float,
-        initial_phases: npt.NDArray[np.float_],
+        Delta: npt.NDArray[np.float_],
+        omega_hz: float,
         output_mapping: list[tuple[int, ActiveHinge]],
     ) -> None:
-        n = K.shape[0]
+        n = A.size
+        assert phi0.shape == (n,)
         assert K.shape == (n, n)
-        assert Phi.shape == (n, n)
-        assert initial_phases.shape == (n,)
+        assert Delta.shape == (n, n)
+        self._A = np.asarray(A, dtype=float)
+        self._phi0 = np.asarray(phi0, dtype=float)
         self._K = np.asarray(K, dtype=float)
-        self._Phi = np.asarray(Phi, dtype=float)
-        self._omega = float(omega)
-        self._initial_phases = np.asarray(initial_phases, dtype=float)
+        self._Delta = np.asarray(Delta, dtype=float)
+        self._omega_hz = float(omega_hz)
         self._output_mapping = output_mapping
 
     @staticmethod
@@ -121,65 +152,59 @@ class BrainKuramoto(Brain):
         params: Iterable[float],
         network_structure: KuramotoNetworkStructure,
         output_mapping: list[tuple[int, ActiveHinge]],
-        omega: float = 2 * np.pi,           # 1 Hz default
-        initial_phases: npt.NDArray[np.float_] | None = None,
+        omega_hz: float = DEFAULT_OMEGA_HZ,
     ) -> "BrainKuramoto":
-        weights, phase_offsets = network_structure.split_params(params)
-        K, Phi = network_structure.build_matrices(weights, phase_offsets)
-        n = network_structure.num_oscillators
-        if initial_phases is None:
-            initial_phases = np.zeros(n, dtype=float)
-        else:
-            initial_phases = np.asarray(initial_phases, dtype=float)
-            assert initial_phases.shape == (n,)
+        A, phi0, K_flat, Delta_flat = network_structure.split_params(params)
+        K, D = network_structure.build_matrices(K_flat, Delta_flat)
         return BrainKuramoto(
-            K=K, Phi=Phi, omega=omega,
-            initial_phases=initial_phases,
-            output_mapping=output_mapping,
+            A=A, phi0=phi0, K=K, Delta=D,
+            omega_hz=omega_hz, output_mapping=output_mapping,
         )
 
     def make_instance(self) -> "BrainKuramotoInstance":
         return BrainKuramotoInstance(
-            K=self._K.copy(), Phi=self._Phi.copy(),
-            omega=self._omega,
-            phases=self._initial_phases.copy(),
+            A=self._A.copy(),
+            K=self._K.copy(),
+            Delta=self._Delta.copy(),
+            omega_hz=self._omega_hz,
+            phases=self._phi0.copy(),
             output_mapping=list(self._output_mapping),
         )
 
 
 class BrainKuramotoInstance(BrainInstance):
-    """Stateful Kuramoto network. State = (n,) phase vector."""
+    """Runtime instance. Integrates phases with RK4."""
 
     def __init__(
         self,
+        A: npt.NDArray[np.float_],
         K: npt.NDArray[np.float_],
-        Phi: npt.NDArray[np.float_],
-        omega: float,
+        Delta: npt.NDArray[np.float_],
+        omega_hz: float,
         phases: npt.NDArray[np.float_],
         output_mapping: list[tuple[int, ActiveHinge]],
     ) -> None:
+        self._A = A
         self._K = K
-        self._Phi = Phi
-        self._omega = omega
-        self._theta = phases
+        self._Delta = Delta
+        self._omega_rad = 2.0 * np.pi * omega_hz
+        self._phi = phases
         self._output_mapping = output_mapping
-        self._n = K.shape[0]
 
-    def _dynamics(self, theta: npt.NDArray[np.float_]) -> npt.NDArray[np.float_]:
-        """dtheta/dt = omega + sum_j K_ij * sin(theta_j - theta_i - Phi_ij)."""
-        # theta_diff[i, j] = theta[j] - theta[i] - Phi[i, j]
-        theta_diff = theta[None, :] - theta[:, None] - self._Phi
-        coupling = (self._K * np.sin(theta_diff)).sum(axis=1)
-        return self._omega + coupling
+    def _dphi(self, phi: npt.NDArray[np.float_]) -> npt.NDArray[np.float_]:
+        # diff[i, j] = phi[j] - phi[i] - Delta[i, j]
+        diff = phi[None, :] - phi[:, None] - self._Delta
+        coupling = (self._K * np.sin(diff)).sum(axis=1)
+        return self._omega_rad + coupling
 
-    def _rk4(
-        self, theta: npt.NDArray[np.float_], dt: float
+    def _rk4_step(
+        self, phi: npt.NDArray[np.float_], dt: float
     ) -> npt.NDArray[np.float_]:
-        k1 = self._dynamics(theta)
-        k2 = self._dynamics(theta + dt / 2 * k1)
-        k3 = self._dynamics(theta + dt / 2 * k2)
-        k4 = self._dynamics(theta + dt * k3)
-        return theta + dt / 6 * (k1 + 2 * (k2 + k3) + k4)
+        k1 = self._dphi(phi)
+        k2 = self._dphi(phi + 0.5 * dt * k1)
+        k3 = self._dphi(phi + 0.5 * dt * k2)
+        k4 = self._dphi(phi + dt * k3)
+        return phi + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
     def control(
         self,
@@ -187,25 +212,35 @@ class BrainKuramotoInstance(BrainInstance):
         sensor_state: ModularRobotSensorState,
         control_interface: ModularRobotControlInterface,
     ) -> None:
-        self._theta = self._rk4(self._theta, dt)
-        # Wrap phases to [-pi, pi] periodically to prevent unbounded growth.
-        self._theta = (self._theta + np.pi) % (2 * np.pi) - np.pi
+        self._phi = self._rk4_step(self._phi, dt)
+        # Wrap to [-pi, pi) to keep the numeric range bounded.
+        self._phi = (self._phi + np.pi) % (2.0 * np.pi) - np.pi
 
         for osc_index, hinge in self._output_mapping:
-            target = float(np.sin(self._theta[osc_index])) * hinge.range
+            target = float(self._A[osc_index] * np.sin(self._phi[osc_index]))
             control_interface.set_active_hinge_target(hinge, target)
 
 
 # ---------------------------------------------------------------------------
-# Helper: build KuramotoNetworkStructure from existing CpgNetworkStructure
-# (so we can reuse the BLF / neighbor / uncoupled topology builders).
+# Helpers
 # ---------------------------------------------------------------------------
 
 
 def kuramoto_structure_from_cpg_structure(
     cpg_structure: CpgNetworkStructure,
 ) -> KuramotoNetworkStructure:
+    """Reuse existing BLF / neighbour / uncoupled topology builders."""
     return KuramotoNetworkStructure(
         oscillators=list(cpg_structure.cpgs),
         connections=set(cpg_structure.connections),
     )
+
+
+def param_bounds(
+    network_structure: KuramotoNetworkStructure,
+) -> tuple[list[float], list[float]]:
+    """CMA-ES bounds aligned with the parameter layout."""
+    n, nc = network_structure.num_oscillators, network_structure.num_connections
+    lower = [0.0] * n + [0.0] * n + [0.0] * nc + [0.0] * nc
+    upper = [A_MAX] * n + [2 * np.pi] * n + [K_MAX] * nc + [2 * np.pi] * nc
+    return lower, upper
