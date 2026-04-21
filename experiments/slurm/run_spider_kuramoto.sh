@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=30
 #SBATCH --mem-per-cpu=4G
-#SBATCH --array=1-180
+#SBATCH --array=1-90
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 
@@ -23,15 +23,15 @@ ROBOT="spider"
 CONTROLLER="kuramoto"
 COUPLINGS=("uncoupled" "neighbor" "blf")
 LAMBDAS=(0 2)
-NUM_SEEDS=30
+NUM_SEEDS=15
 
-HZ=0.2
+HZ=0.7
 SIM_TIME=30
 GENERATIONS=300
 POPULATION=30
 WORKERS=30
 
-RESULTS_DIR="results/spider_kuramoto_hz0.2"
+RESULTS_DIR="results/spider_kuramoto_hz0.7"
 
 # Layout: NUM_SEEDS x len(LAMBDAS) x len(COUPLINGS) = 30 x 2 x 3 = 180
 TASK_ID=$SLURM_ARRAY_TASK_ID
