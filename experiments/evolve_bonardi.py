@@ -84,7 +84,10 @@ class EvalResult:
     final_y: float = 0.0
 
 
-def get_structure(robot_name: str, coupling: str):
+def get_structure(
+    robot_name: str, coupling: str,
+    evolve_phi0: bool = False, evolve_w: bool = False,
+):
     body = modular_robots_v1.get(robot_name)
     hinges = body.find_modules_of_type(ActiveHinge)
     if coupling == "uncoupled":
@@ -97,7 +100,9 @@ def get_structure(robot_name: str, coupling: str):
         cpg, mapping = active_hinges_to_cpg_network_structure_fully_connected(hinges)
     else:
         raise ValueError(f"Unknown coupling: {coupling}")
-    return body, bonardi_structure_from_cpg_structure(cpg), mapping
+    return body, bonardi_structure_from_cpg_structure(
+        cpg, evolve_phi0=evolve_phi0, evolve_w=evolve_w,
+    ), mapping
 
 
 def unnormalize(norm_params: np.ndarray, lower: np.ndarray, upper: np.ndarray) -> np.ndarray:
@@ -114,11 +119,15 @@ def evaluate(
     w: float,
     lower: np.ndarray,
     upper: np.ndarray,
+    evolve_phi0: bool,
+    evolve_w: bool,
 ) -> EvalResult:
     try:
         native_params = unnormalize(np.asarray(norm_params), lower, upper)
 
-        body, ks, mapping = get_structure(robot_name, coupling)
+        body, ks, mapping = get_structure(
+            robot_name, coupling, evolve_phi0=evolve_phi0, evolve_w=evolve_w,
+        )
         brain = BrainBonardi.from_params(
             params=native_params,
             network_structure=ks,
@@ -205,13 +214,18 @@ def evaluate(
 
 
 def _eval_wrapper(args):
-    idx, norm_params, robot, coup, sim_time, lam, nu_hz, w, lower, upper = args
-    r = evaluate(norm_params, robot, coup, sim_time, lam, nu_hz, w, lower, upper)
+    (idx, norm_params, robot, coup, sim_time, lam, nu_hz, w,
+     lower, upper, evolve_phi0, evolve_w) = args
+    r = evaluate(norm_params, robot, coup, sim_time, lam, nu_hz, w,
+                 lower, upper, evolve_phi0, evolve_w)
     return idx, r
 
 
 def run_evolution(args):
-    body, ks, mapping = get_structure(args.robot, args.coupling)
+    body, ks, mapping = get_structure(
+        args.robot, args.coupling,
+        evolve_phi0=args.evolve_phi0, evolve_w=args.evolve_w,
+    )
     n_params = ks.num_params
     n_osc = ks.num_oscillators
     n_conn = ks.num_connections
@@ -233,8 +247,15 @@ def run_evolution(args):
     nu_hz = args.nu
     w = args.w
 
+    variant = ""
+    if args.evolve_phi0:
+        variant += "_phi"
+    if args.evolve_w:
+        variant += "_w"
+    if not variant:
+        variant = "_base"
     experiment_name = (
-        f"{args.robot}_bonardi_{args.coupling}_lambda{int(args.lambda_penalty)}"
+        f"{args.robot}_bonardi{variant}_{args.coupling}_lambda{int(args.lambda_penalty)}"
         f"_nu{nu_hz}_w{w}"
     )
     results_dir = os.path.join(args.results_dir, experiment_name)
@@ -307,7 +328,8 @@ def run_evolution(args):
 
         args_list = [
             (i, np.asarray(s), args.robot, args.coupling, args.sim_time,
-             args.lambda_penalty, nu_hz, w, lower_native, upper_native)
+             args.lambda_penalty, nu_hz, w, lower_native, upper_native,
+             args.evolve_phi0, args.evolve_w)
             for i, s in enumerate(sols)
         ]
 
@@ -419,6 +441,10 @@ def main():
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--run-num", type=int, default=1)
     parser.add_argument("--results-dir", type=str, default="results/bonardi")
+    parser.add_argument("--evolve-phi0", action="store_true",
+                        help="Also evolve per-oscillator initial phases.")
+    parser.add_argument("--evolve-w", action="store_true",
+                        help="Also evolve per-edge coupling strengths.")
     args = parser.parse_args()
     run_evolution(args)
 

@@ -61,10 +61,20 @@ PSI_MAX = 2 * np.pi      # full circle
 
 @dataclass
 class BonardiNetworkStructure:
-    """Topology container for a Bonardi-style CPG."""
+    """Topology container for a Bonardi-style CPG.
+
+    Supports four variants via flags:
+      - evolve_phi0: True = evolve initial phases per oscillator (+n params)
+      - evolve_w:    True = evolve per-edge coupling weights (+nc params)
+
+    Base evolved params (always): A (n), X (n), psi (nc).
+    Full layout: [A, X, psi, phi0?, w?]
+    """
 
     oscillators: list[Cpg]
     connections: set[CpgPair]
+    evolve_phi0: bool = False
+    evolve_w: bool = False
 
     @property
     def num_oscillators(self) -> int:
@@ -76,8 +86,13 @@ class BonardiNetworkStructure:
 
     @property
     def num_params(self) -> int:
-        """Per oscillator: A, X. Per edge: psi. Initial phases fixed at 0."""
-        return 2 * self.num_oscillators + self.num_connections
+        n, nc = self.num_oscillators, self.num_connections
+        p = 2 * n + nc  # A, X, psi always evolved
+        if self.evolve_phi0:
+            p += n
+        if self.evolve_w:
+            p += nc
+        return p
 
     def _sorted_pairs(self) -> list[CpgPair]:
         return sorted(
@@ -91,16 +106,31 @@ class BonardiNetworkStructure:
         npt.NDArray[np.float_],
         npt.NDArray[np.float_],
         npt.NDArray[np.float_],
+        npt.NDArray[np.float_] | None,
+        npt.NDArray[np.float_] | None,
     ]:
-        """Split a flat parameter vector into (A, X, psi)."""
+        """Split a flat parameter vector into (A, X, psi, phi0, w).
+
+        phi0 is None if not evolved (brain will use zeros).
+        w is None if not evolved (brain will use DEFAULT_W).
+        """
         plist = np.asarray(list(params), dtype=float)
         n, nc = self.num_oscillators, self.num_connections
-        expected = 2 * n + nc
+        expected = self.num_params
         assert plist.size == expected, f"Expected {expected} params, got {plist.size}"
-        A = plist[:n]
-        X = plist[n : 2 * n]
-        psi_flat = plist[2 * n :]
-        return A, X, psi_flat
+        offset = 0
+        A = plist[offset:offset + n]; offset += n
+        X = plist[offset:offset + n]; offset += n
+        psi_flat = plist[offset:offset + nc]; offset += nc
+        phi0 = None
+        if self.evolve_phi0:
+            phi0 = plist[offset:offset + n]
+            offset += n
+        w_flat = None
+        if self.evolve_w:
+            w_flat = plist[offset:offset + nc]
+            offset += nc
+        return A, X, psi_flat, phi0, w_flat
 
     def build_psi_matrix(
         self, psi_flat: npt.NDArray[np.float_]
@@ -115,15 +145,18 @@ class BonardiNetworkStructure:
             psi[j, i] = -psi_flat[k]
         return psi
 
-    def build_w_matrix(self, w: float) -> npt.NDArray[np.float_]:
-        """Build uniform coupling-strength matrix. Zero when no edge."""
+    def build_w_matrix(
+        self, w_default: float, w_flat: npt.NDArray[np.float_] | None = None
+    ) -> npt.NDArray[np.float_]:
+        """Build coupling-strength matrix. Uses w_flat if provided, else uniform w_default."""
         n = self.num_oscillators
         W = np.zeros((n, n), dtype=float)
-        for pair in self._sorted_pairs():
+        for k, pair in enumerate(self._sorted_pairs()):
             i = pair.cpg_index_lowest.index
             j = pair.cpg_index_highest.index
-            W[i, j] = w
-            W[j, i] = w
+            w_ij = float(w_flat[k]) if w_flat is not None else w_default
+            W[i, j] = w_ij
+            W[j, i] = w_ij
         return W
 
 
@@ -161,11 +194,11 @@ class BrainBonardi(Brain):
         nu_hz: float = DEFAULT_NU_HZ,
         w: float = DEFAULT_W,
     ) -> "BrainBonardi":
-        A, X, psi_flat = network_structure.split_params(params)
+        A, X, psi_flat, phi0_opt, w_flat = network_structure.split_params(params)
         psi = network_structure.build_psi_matrix(psi_flat)
-        W = network_structure.build_w_matrix(w)
+        W = network_structure.build_w_matrix(w, w_flat)
         n = network_structure.num_oscillators
-        phi0 = np.zeros(n, dtype=float)  # all oscillators start at phase 0
+        phi0 = phi0_opt if phi0_opt is not None else np.zeros(n, dtype=float)
         return BrainBonardi(
             A=A, X=X, phi0=phi0, psi=psi, W=W,
             nu_hz=nu_hz, output_mapping=output_mapping,
@@ -246,12 +279,19 @@ class BrainBonardiInstance(BrainInstance):
 
 def bonardi_structure_from_cpg_structure(
     cpg_structure: CpgNetworkStructure,
+    evolve_phi0: bool = False,
+    evolve_w: bool = False,
 ) -> BonardiNetworkStructure:
     """Reuse existing BLF / neighbour / uncoupled topology builders."""
     return BonardiNetworkStructure(
         oscillators=list(cpg_structure.cpgs),
         connections=set(cpg_structure.connections),
+        evolve_phi0=evolve_phi0,
+        evolve_w=evolve_w,
     )
+
+
+W_MAX = 2.0  # upper bound on per-edge coupling strength when evolved
 
 
 def param_bounds(
@@ -259,9 +299,15 @@ def param_bounds(
 ) -> tuple[list[float], list[float]]:
     """Native parameter bounds aligned with the parameter layout.
 
-    Order: [A (n), X (n), psi (nc)].
+    Order: [A (n), X (n), psi (nc), phi0 (n)?, w (nc)?]
     """
     n, nc = network_structure.num_oscillators, network_structure.num_connections
     lower = [0.0] * n + [-X_MAX] * n + [0.0] * nc
     upper = [A_MAX] * n + [X_MAX] * n + [PSI_MAX] * nc
+    if network_structure.evolve_phi0:
+        lower += [0.0] * n
+        upper += [PSI_MAX] * n
+    if network_structure.evolve_w:
+        lower += [0.0] * nc
+        upper += [W_MAX] * nc
     return lower, upper
