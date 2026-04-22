@@ -69,6 +69,20 @@ def build_robot(robot_name, controller=None, coupling=None, params_path=None, hz
             output_mapping=output_mapping,
             omega_hz=hz,
         )
+    elif controller == "bonardi":
+        # Params are in NATIVE scale (A, X, psi) with length 2n + nc.
+        from bonardi_brain import (
+            BrainBonardi,
+            bonardi_structure_from_cpg_structure,
+        )
+        bs = bonardi_structure_from_cpg_structure(cpg_structure)
+        brain = BrainBonardi.from_params(
+            params=params,
+            network_structure=bs,
+            output_mapping=output_mapping,
+            nu_hz=hz,
+            w=1.0,
+        )
     else:
         # ode_cpg (Hopf): params are just coupling weights, length = num_connections.
         brain = BrainCpgNetworkStatic.uniform_from_params(
@@ -86,7 +100,7 @@ def main():
     parser.add_argument("robot", type=str, choices=["spider", "big_spider", "gecko", "big_gecko", "hexapod", "xbot", "gecko_spider", "salamander", "ant", "snake", "pentapod", "turtle", "babya", "squarish", "longleg", "stingray", "mantis", "hydra", "queen", "zappa", "blokky", "insect", "babyb", "garrix", "linkin", "longleg", "park", "penguin", "stingray", "tinlicker", "turtle", "ww", "arachnid", "tripod"])
     parser.add_argument("--params", type=str, default=None, help="Path to saved .npy params")
     parser.add_argument("--controller", type=str, default=None,
-                        choices=["ode_cpg", "kuramoto"])
+                        choices=["ode_cpg", "kuramoto", "bonardi"])
     parser.add_argument("--coupling", type=str, default="uncoupled",
                         choices=["uncoupled", "neighbor", "blf", "fully_connected"])
     parser.add_argument("--hz", type=float, default=0.2,
