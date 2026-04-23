@@ -30,9 +30,9 @@ HINGE_FRAME_OFFSET = 0.04525
 HINGE_SERVO_OFFSET = 0.0299
 
 # Revolve2 colors
-CORE_RGBA  = "1.0 0.196 0.196 1"   # red
-BRICK_RGBA = "0.196 0.196 1.0 1"   # blue
-HINGE_RGBA = "1.0 1.0 1.0 1"       # white
+CORE_RGBA  = "0.92 0.18 0.18 1"    # red, slightly desaturated
+BRICK_RGBA = "0.20 0.30 0.85 1"    # blue, slightly desaturated
+HINGE_RGBA = "0.82 0.82 0.82 1"    # light grey instead of pure white -> shadows are visible
 
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
 TMP_DIR = os.path.join(OUT_DIR, "_module_renders")
@@ -45,24 +45,29 @@ LABEL_H = 60
 
 
 def make_xml(geoms_xml: str) -> str:
-    """Wrap module-geom XML in a renderable MJCF document with checker floor."""
+    """Wrap module-geom XML in a renderable MJCF document.
+
+    Aesthetics tuned for the MuJoCo viewer look: skybox gradient,
+    grey-on-grey checker floor with cross marks (matches Revolve2 sim),
+    strong directional sun + soft fill light.
+    """
     return f"""
 <mujoco>
   <visual>
-    <headlight ambient="0.4 0.4 0.4" diffuse="0.5 0.5 0.5" specular="0.05 0.05 0.05"/>
+    <headlight ambient="0.25 0.25 0.27" diffuse="0.35 0.35 0.37" specular="0.08 0.08 0.08"/>
     <map zfar="30" znear="0.005"/>
     <quality shadowsize="4096"/>
     <global offwidth="{PANEL_W}" offheight="{PANEL_H}"/>
   </visual>
   <asset>
-    <texture type="skybox" builtin="flat" rgb1="0.94 0.94 0.94" rgb2="0.94 0.94 0.94" width="32" height="32"/>
-    <texture name="floor_tex" type="2d" builtin="checker" mark="cross" rgb1="0.86 0.86 0.86" rgb2="0.78 0.78 0.78" markrgb="0.31 0.31 0.31" width="300" height="300"/>
-    <material name="floor_mat" texture="floor_tex" texrepeat="6 6" reflectance="0.0" shininess="0.0"/>
+    <texture type="skybox" builtin="gradient" rgb1="0.55 0.62 0.72" rgb2="0.86 0.89 0.92" width="256" height="256"/>
+    <texture name="floor_tex" type="2d" builtin="checker" mark="cross" rgb1="0.62 0.62 0.62" rgb2="0.78 0.78 0.78" markrgb="0.18 0.18 0.18" width="512" height="512"/>
+    <material name="floor_mat" texture="floor_tex" texrepeat="14 14" reflectance="0.06" shininess="0.05"/>
   </asset>
   <worldbody>
-    <light pos="0.4 -0.3 0.6" dir="-0.5 0.4 -1" diffuse="0.85 0.85 0.85" specular="0.1 0.1 0.1" castshadow="true"/>
-    <light pos="-0.3 0.3 0.4" dir="0.4 -0.4 -1" diffuse="0.35 0.35 0.35" specular="0 0 0" castshadow="false"/>
-    <geom name="floor" type="plane" pos="0 0 0" size="0.5 0.5 0.01" material="floor_mat"/>
+    <light pos="0.45 -0.35 0.7" dir="-0.5 0.4 -1" diffuse="1.0 0.96 0.92" specular="0.25 0.22 0.20" castshadow="true"/>
+    <light pos="-0.35 0.40 0.5" dir="0.4 -0.45 -1" diffuse="0.30 0.32 0.35" specular="0 0 0" castshadow="false"/>
+    <geom name="floor" type="plane" pos="0 0 0" size="0.6 0.6 0.01" material="floor_mat"/>
     {geoms_xml}
   </worldbody>
 </mujoco>
@@ -103,8 +108,8 @@ def hinge_xml() -> str:
     return make_xml(geoms)
 
 
-def render_module(xml: str, out_png: str, look_at=(0, 0, 0), distance=0.20,
-                   azimuth=-45.0, elevation=-25.0):
+def render_module(xml: str, out_png: str, look_at=(0, 0, 0), distance=0.22,
+                   azimuth=-40.0, elevation=-18.0):
     model = mujoco.MjModel.from_xml_string(xml)
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
