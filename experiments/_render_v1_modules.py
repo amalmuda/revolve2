@@ -165,7 +165,7 @@ def main():
     for label, xml_fn, fname, lookat in [
         ("Core",         core_xml,  "core.png",  (0, 0, 0.025)),
         ("Brick",        brick_xml, "brick.png", (0, 0, 0.025)),
-        ("Active hinge", hinge_xml, "hinge.png", (0.04, 0, 0.025)),
+        ("Active hinge", hinge_xml, "hinge.png", (0.025, 0, 0.025)),
     ]:
         out = os.path.join(TMP_DIR, fname)
         render_module(xml_fn(), out, look_at=lookat)
