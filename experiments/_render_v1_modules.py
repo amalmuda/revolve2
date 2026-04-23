@@ -110,6 +110,7 @@ def hinge_xml() -> str:
 
 def render_module(xml: str, out_png: str, look_at=(0, 0, 0), distance=0.22,
                    azimuth=-40.0, elevation=-18.0):
+    """Render one module. distance is from look_at; default 0.22 m used for cubes."""
     model = mujoco.MjModel.from_xml_string(xml)
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
@@ -162,13 +163,13 @@ def composite(panels: list[tuple[str, str]], out_path: str):
 
 def main():
     panels = []
-    for label, xml_fn, fname, lookat in [
-        ("Core",         core_xml,  "core.png",  (0, 0, 0.025)),
-        ("Brick",        brick_xml, "brick.png", (0, 0, 0.025)),
-        ("Active hinge", hinge_xml, "hinge.png", (0.083, 0, 0.025)),
+    for label, xml_fn, fname, lookat, dist in [
+        ("Core",         core_xml,  "core.png",  (0, 0, 0.025),     0.22),
+        ("Brick",        brick_xml, "brick.png", (0, 0, 0.025),     0.22),
+        ("Active hinge", hinge_xml, "hinge.png", (0.045, 0, 0.025), 0.18),
     ]:
         out = os.path.join(TMP_DIR, fname)
-        render_module(xml_fn(), out, look_at=lookat)
+        render_module(xml_fn(), out, look_at=lookat, distance=dist)
         panels.append((label, out))
         print(f"Rendered {label} -> {out}")
 
