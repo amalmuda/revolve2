@@ -1,18 +1,27 @@
-"""Render the teaching body in MuJoCo for Chapter 3 figures.
+"""High-resolution MuJoCo render of the teaching body.
 
-Uses the same aesthetic as Figure 3.2: gradient sky, high-contrast
-checker floor with cross marks, warm directional sun + cool fill. Top-down
-angle so all modules are visible.
+Produces two views saved to the thesis figures directory:
+  - teaching_body.png      (angled perspective)
+  - teaching_body_top.png  (top-down, horizontally mirrored)
+
+Pipeline:
+  1. Build a Revolve2 ModularRobotScene with the teaching body + checker floor.
+  2. Call scene_to_model to compile to a MuJoCo MjModel.
+  3. Save the compiled XML via mj_saveLastXML, inject:
+       - sky-blue gradient skybox (no more black background)
+       - <global offwidth/offheight> for high-res offscreen rendering
+       - larger shadow map
+  4. Reload the modified XML to a fresh MjModel and render with mujoco.Renderer.
+  5. Top-down view: mirror horizontally via PIL for the requested orientation.
 """
-import math
 import os
+import tempfile
 
 import numpy as np
 import mujoco
 from PIL import Image
 
 from revolve2.modular_robot import ModularRobot
-from revolve2.modular_robot.body.base import ActiveHinge
 from revolve2.modular_robot.brain.cpg import BrainCpgNetworkNeighborRandom
 from revolve2.modular_robot_simulation import ModularRobotScene, Terrain
 from revolve2.simulators.mujoco_simulator._scene_to_model import scene_to_model
@@ -24,12 +33,15 @@ from revolve2.simulation.scene.vector2 import Vector2
 from teaching_body import teaching_body_v1
 
 
-OUT_ANGLE = "/home/abdullah/masteroppgave/master_thesis/figures/teaching_body.png"
-OUT_TOP = "/home/abdullah/masteroppgave/master_thesis/figures/teaching_body_top.png"
-W, H = 640, 480  # MuJoCo's default offscreen framebuffer max
+FIG_DIR = "/home/abdullah/masteroppgave/master_thesis/figures"
+OUT_ANGLE_PNG = f"{FIG_DIR}/teaching_body.png"
+OUT_ANGLE_PDF = f"{FIG_DIR}/teaching_body.pdf"
+OUT_TOP_PNG = f"{FIG_DIR}/teaching_body_top.png"
+OUT_TOP_PDF = f"{FIG_DIR}/teaching_body_top.pdf"
+W, H = 4096, 4096  # 4K+ — offscreen buffer resized via <global offwidth/offheight>
 
 
-def build_model():
+def build_compiled_model():
     body = teaching_body_v1()
     rng = np.random.default_rng(0)
     brain = BrainCpgNetworkNeighborRandom(body=body, rng=rng)
@@ -54,12 +66,55 @@ def build_model():
         sim_scene, simulation_timestep=0.001,
         cast_shadows=True, fast_sim=False,
     )
-    data = mujoco.MjData(model)
-    mujoco.mj_forward(model, data)
-    return model, data
+    return model
 
 
-def render_with_camera(model, data, lookat, distance, azimuth, elevation, out_path):
+def inject_sky_and_offscreen(base_model: mujoco.MjModel) -> mujoco.MjModel:
+    """Dump last-compiled XML, inject skybox + high-res offscreen buffer, recompile."""
+    with tempfile.NamedTemporaryFile(suffix=".xml", mode="w", delete=False) as f:
+        tmp = f.name
+    try:
+        err = mujoco.mj_saveLastXML(tmp, base_model)
+        if err:
+            print(f"mj_saveLastXML warning: {err}")
+        with open(tmp) as f:
+            xml = f.read()
+    finally:
+        os.unlink(tmp)
+
+    # Add skybox asset, offscreen buffer, shadow quality.
+    injection = (
+        '  <visual>\n'
+        f'    <global offwidth="{W}" offheight="{H}"/>\n'
+        '    <quality shadowsize="8192" numslices="64" numstacks="32"/>\n'
+        '  </visual>\n'
+        '  <asset>\n'
+        '    <texture type="skybox" builtin="gradient" '
+        'rgb1="0.55 0.62 0.72" rgb2="0.86 0.89 0.92" width="256" height="256"/>\n'
+        '  </asset>\n'
+    )
+    # Insert just before the first <worldbody> tag.
+    idx = xml.find("<worldbody")
+    assert idx != -1, "no <worldbody> in saved XML"
+    xml = xml[:idx] + injection + xml[idx:]
+
+    return mujoco.MjModel.from_xml_string(xml)
+
+
+def body_center_and_extent(model, data):
+    mins = np.full(3, np.inf)
+    maxs = np.full(3, -np.inf)
+    for i in range(model.ngeom):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i)
+        if name and "mbs" in name:
+            p = data.geom_xpos[i]
+            mins = np.minimum(mins, p)
+            maxs = np.maximum(maxs, p)
+    return (mins + maxs) / 2.0, float(np.max(maxs - mins))
+
+
+def render(model, data, lookat, distance, azimuth, elevation,
+           png_path, pdf_path, mirror=False):
     cam = mujoco.MjvCamera()
     mujoco.mjv_defaultCamera(cam)
     cam.lookat[:] = lookat
@@ -75,44 +130,36 @@ def render_with_camera(model, data, lookat, distance, azimuth, elevation, out_pa
         if hasattr(r, "close"):
             r.close()
 
-    Image.fromarray(img).save(out_path)
-    print(f"Saved: {out_path}  ({W}x{H})")
+    pil = Image.fromarray(img)
+    if mirror:
+        pil = pil.transpose(Image.FLIP_LEFT_RIGHT)
+
+    # PNG: lossless, compressed. Good for LaTeX (pdflatex / xelatex).
+    pil.save(png_path, optimize=True, compress_level=9)
+    # PDF: same raster image wrapped as a single-page PDF. LaTeX-native.
+    pil.convert("RGB").save(pdf_path, "PDF", resolution=300.0)
+    print(f"Saved: {png_path} and {pdf_path}  ({pil.size[0]}x{pil.size[1]})")
 
 
 def main():
-    model, data = build_model()
+    base_model = build_compiled_model()
+    model = inject_sky_and_offscreen(base_model)
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
 
-    # Find the body's bounding box center for a well-centered lookat
-    # The robot's geoms are in data.geom_xpos after mj_forward
-    mins = np.full(3, np.inf)
-    maxs = np.full(3, -np.inf)
-    for i in range(model.ngeom):
-        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i)
-        if name and "mbs" in name:
-            p = data.geom_xpos[i]
-            mins = np.minimum(mins, p)
-            maxs = np.maximum(maxs, p)
-    center = (mins + maxs) / 2.0
-    extent = float(np.max(maxs - mins))
-    print(f"robot bbox center={center}  extent={extent:.3f}")
+    center, extent = body_center_and_extent(model, data)
+    dist = max(0.55, 2.0 * extent)
+    print(f"robot bbox center={center}  extent={extent:.3f}  cam distance={dist:.3f}")
 
-    # Angled (perspective) view
-    render_with_camera(
-        model, data,
-        lookat=tuple(center),
-        distance=max(0.55, 2.0 * extent),
-        azimuth=-55.0, elevation=-30.0,
-        out_path=OUT_ANGLE,
-    )
+    render(model, data,
+           lookat=tuple(center), distance=dist,
+           azimuth=-55.0, elevation=-30.0,
+           png_path=OUT_ANGLE_PNG, pdf_path=OUT_ANGLE_PDF, mirror=False)
 
-    # Top-down (flat) view
-    render_with_camera(
-        model, data,
-        lookat=tuple(center),
-        distance=max(0.55, 2.0 * extent),
-        azimuth=0.0, elevation=-89.9,
-        out_path=OUT_TOP,
-    )
+    render(model, data,
+           lookat=tuple(center), distance=dist,
+           azimuth=0.0, elevation=-89.9,
+           png_path=OUT_TOP_PNG, pdf_path=OUT_TOP_PDF, mirror=True)
 
 
 if __name__ == "__main__":
