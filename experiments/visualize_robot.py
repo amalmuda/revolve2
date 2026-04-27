@@ -70,12 +70,20 @@ def build_robot(robot_name, controller=None, coupling=None, params_path=None, hz
             omega_hz=hz,
         )
     elif controller == "bonardi":
-        # Params are in NATIVE scale (A, X, psi) with length 2n + nc.
+        # Auto-detect param layout from the params length.
         from bonardi_brain import (
             BrainBonardi,
             bonardi_structure_from_cpg_structure,
         )
-        bs = bonardi_structure_from_cpg_structure(cpg_structure)
+        n = len(active_hinges)
+        nc = len(cpg_structure.connections)
+        n_params_loaded = len(params)
+        # Possible variants: base=2n+nc, +phi=3n+nc, +w=2n+2nc, +phi+w=3n+2nc
+        evolve_phi0 = (n_params_loaded - 2*n - nc) in (n, n + nc)
+        evolve_w = (n_params_loaded - 2*n - nc) in (nc, n + nc)
+        bs = bonardi_structure_from_cpg_structure(
+            cpg_structure, evolve_phi0=evolve_phi0, evolve_w=evolve_w,
+        )
         brain = BrainBonardi.from_params(
             params=params,
             network_structure=bs,
@@ -97,7 +105,7 @@ def build_robot(robot_name, controller=None, coupling=None, params_path=None, hz
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize a robot in MuJoCo viewer")
-    parser.add_argument("robot", type=str, choices=["spider", "big_spider", "gecko", "big_gecko", "hexapod", "xbot", "gecko_spider", "salamander", "ant", "snake", "pentapod", "turtle", "babya", "squarish", "longleg", "stingray", "mantis", "hydra", "queen", "zappa", "blokky", "insect", "babyb", "garrix", "linkin", "longleg", "park", "penguin", "stingray", "tinlicker", "turtle", "ww", "arachnid", "tripod"])
+    parser.add_argument("robot", type=str, choices=["spider", "big_spider", "gecko", "big_gecko", "hexapod", "xbot", "gecko_spider", "salamander", "ant", "snake", "pentapod", "turtle", "babya", "squarish", "longleg", "stingray", "mantis", "hydra", "queen", "zappa", "blokky", "insect", "babyb", "garrix", "linkin", "longleg", "park", "penguin", "stingray", "tinlicker", "turtle", "ww", "arachnid", "tripod", "ege"])
     parser.add_argument("--params", type=str, default=None, help="Path to saved .npy params")
     parser.add_argument("--controller", type=str, default=None,
                         choices=["ode_cpg", "kuramoto", "bonardi"])

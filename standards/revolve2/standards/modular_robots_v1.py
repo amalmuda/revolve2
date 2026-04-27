@@ -37,6 +37,8 @@ def all() -> list[BodyV1]:
         park_v1(),
         mantis_v1(),
         hydra_v1(),
+        ege_v1(),
+        ege2_v1(),
     ]
 
 
@@ -666,6 +668,80 @@ def garrix_v1() -> BodyV1:
     return body
 
 
+def ege_v1() -> BodyV1:
+    """
+    Get the ege modular robot.
+
+    Topology:
+        spine: brick0 - core - brick1 - brick2
+        sides of brick2: hinge(pi/2) - brick (each side)
+        sides of core: hinge(pi/2) - hinge(pi/2) - hinge(0) - brick - brick(inner side)
+
+    :returns: the robot.
+    """
+    body = BodyV1()
+
+    body.core_v1.back = BrickV1(0.0)
+    body.core_v1.front = BrickV1(0.0)
+    body.core_v1.front.front = BrickV1(0.0)
+    brick2 = body.core_v1.front.front
+
+    brick2.left = ActiveHingeV1(np.pi / 2.0)
+    brick2.left.attachment = BrickV1(-np.pi / 2.0)
+    brick2.right = ActiveHingeV1(np.pi / 2.0)
+    brick2.right.attachment = BrickV1(-np.pi / 2.0)
+
+    body.core_v1.left = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.left.attachment = ActiveHingeV1(0.0)
+    body.core_v1.left.attachment.attachment = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.left.attachment.attachment.attachment = BrickV1(0.0)
+    body.core_v1.left.attachment.attachment.attachment.left = BrickV1(0.0)
+
+    body.core_v1.right = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.right.attachment = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment.attachment = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.right.attachment.attachment.attachment = BrickV1(0.0)
+    body.core_v1.right.attachment.attachment.attachment.right = BrickV1(0.0)
+
+    return body
+
+
+def ege2_v1() -> BodyV1:
+    """
+    Get the ege2 modular robot.
+
+    Same as ege but with the brick2 (back-spine) hips rotated to 0
+    instead of pi/2.
+
+    :returns: the robot.
+    """
+    body = BodyV1()
+
+    body.core_v1.back = BrickV1(0.0)
+    body.core_v1.front = BrickV1(0.0)
+    body.core_v1.front.front = BrickV1(0.0)
+    brick2 = body.core_v1.front.front
+
+    brick2.left = ActiveHingeV1(0.0)
+    brick2.left.attachment = BrickV1(-np.pi / 2.0)
+    brick2.right = ActiveHingeV1(0.0)
+    brick2.right.attachment = BrickV1(-np.pi / 2.0)
+
+    body.core_v1.left = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.left.attachment = ActiveHingeV1(0.0)
+    body.core_v1.left.attachment.attachment = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.left.attachment.attachment.attachment = BrickV1(0.0)
+    body.core_v1.left.attachment.attachment.attachment.left = BrickV1(0.0)
+
+    body.core_v1.right = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.right.attachment = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment.attachment = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.right.attachment.attachment.attachment = BrickV1(0.0)
+    body.core_v1.right.attachment.attachment.attachment.right = BrickV1(0.0)
+
+    return body
+
+
 def insect_v1() -> BodyV1:
     """
     Get the insect modular robot.
@@ -678,13 +754,13 @@ def insect_v1() -> BodyV1:
     body.core_v1.right.attachment = ActiveHingeV1(-np.pi / 2.0)
     body.core_v1.right.attachment.attachment = BrickV1(0.0)
     body.core_v1.right.attachment.attachment.right = ActiveHingeV1(0.0)
-    body.core_v1.right.attachment.attachment.front = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.right.attachment.attachment.front = ActiveHingeV1(0.0)
     body.core_v1.right.attachment.attachment.left = ActiveHingeV1(np.pi / 2.0)
     body.core_v1.right.attachment.attachment.left.attachment = BrickV1(-np.pi / 2.0)
-    body.core_v1.right.attachment.attachment.left.attachment.front = ActiveHingeV1(
+    body.core_v1.right.attachment.attachment.left.attachment.front = ActiveHingeV1(0.0)
+    body.core_v1.right.attachment.attachment.left.attachment.right = ActiveHingeV1(
         np.pi / 2.0
     )
-    body.core_v1.right.attachment.attachment.left.attachment.right = ActiveHingeV1(0.0)
     body.core_v1.right.attachment.attachment.left.attachment.right.attachment = (
         ActiveHingeV1(0.0)
     )
@@ -838,7 +914,7 @@ def queen_v1() -> BodyV1:
     """
     body = BodyV1()
 
-    body.core_v1.back = ActiveHingeV1(np.pi / 2.0)
+    body.core_v1.back = ActiveHingeV1(0.0)
     body.core_v1.right = ActiveHingeV1(np.pi / 2.0)
     body.core_v1.right.attachment = ActiveHingeV1(0.0)
     body.core_v1.right.attachment.attachment = ActiveHingeV1(-np.pi / 2.0)
@@ -853,7 +929,7 @@ def queen_v1() -> BodyV1:
 
     part2.right.right = BrickV1(0.0)
     part2.right.right.front = ActiveHingeV1(np.pi / 2.0)
-    part2.right.right.front.attachment = ActiveHingeV1(0.0)
+    part2.right.right.front.attachment = ActiveHingeV1(np.pi / 2.0)
 
     return body
 
@@ -1239,5 +1315,9 @@ def get(name: str) -> BodyV1:
             return mantis_v1()
         case "hydra":
             return hydra_v1()
+        case "ege":
+            return ege_v1()
+        case "ege2":
+            return ege2_v1()
         case _:
             raise ValueError(f"Robot does not exist: {name}")
