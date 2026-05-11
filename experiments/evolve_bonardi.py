@@ -87,6 +87,7 @@ class EvalResult:
 def get_structure(
     robot_name: str, coupling: str,
     evolve_phi0: bool = False, evolve_w: bool = False,
+    evolve_X: bool = True, evolve_nu: bool = False,
 ):
     body = modular_robots_v1.get(robot_name)
     hinges = body.find_modules_of_type(ActiveHinge)
@@ -102,6 +103,7 @@ def get_structure(
         raise ValueError(f"Unknown coupling: {coupling}")
     return body, bonardi_structure_from_cpg_structure(
         cpg, evolve_phi0=evolve_phi0, evolve_w=evolve_w,
+        evolve_X=evolve_X, evolve_nu=evolve_nu,
     ), mapping
 
 
@@ -121,12 +123,18 @@ def evaluate(
     upper: np.ndarray,
     evolve_phi0: bool,
     evolve_w: bool,
+    evolve_X: bool = True,
+    evolve_nu: bool = False,
+    terrain_heights_path: str | None = None,
+    terrain_z_scale: float = 0.05,
+    skip_drag: bool = False,
 ) -> EvalResult:
     try:
         native_params = unnormalize(np.asarray(norm_params), lower, upper)
 
         body, ks, mapping = get_structure(
             robot_name, coupling, evolve_phi0=evolve_phi0, evolve_w=evolve_w,
+            evolve_X=evolve_X, evolve_nu=evolve_nu,
         )
         brain = BrainBonardi.from_params(
             params=native_params,
@@ -137,24 +145,43 @@ def evaluate(
         )
         robot = ModularRobot(body=body, brain=brain)
 
-        terrain = Terrain(
-            static_geometry=[
-                GeometryPlane(
-                    pose=Pose(), mass=0.0, size=Vector2([20.0, 20.0]),
-                    texture=Texture(
-                        base_color=Color(200, 200, 200, 255),
-                        primary_color=Color(220, 220, 220, 255),
-                        secondary_color=Color(80, 80, 80, 255),
-                        map_type=MapType.MAP2D,
-                        reference=TextureReference(builtin="checker"),
-                        repeat=(50, 50),
-                    ),
-                )
-            ],
-            friction=1.0,
-        )
-        scene = ModularRobotScene(terrain=terrain)
-        scene.add_robot(robot)
+        if terrain_heights_path is not None:
+            from pyrr import Vector3
+            from revolve2.simulation.scene.geometry import GeometryHeightmap
+            heights = np.load(terrain_heights_path)
+            terrain = Terrain(
+                static_geometry=[
+                    GeometryHeightmap(
+                        pose=Pose(),
+                        mass=0.0,
+                        size=Vector3([20.0, 20.0, float(terrain_z_scale)]),
+                        base_thickness=0.2,
+                        heights=heights,
+                    )
+                ],
+                friction=1.0,
+            )
+            scene = ModularRobotScene(terrain=terrain)
+            scene.add_robot(robot, pose=Pose(position=Vector3([0.0, 0.0, 0.3])))
+        else:
+            terrain = Terrain(
+                static_geometry=[
+                    GeometryPlane(
+                        pose=Pose(), mass=0.0, size=Vector2([20.0, 20.0]),
+                        texture=Texture(
+                            base_color=Color(200, 200, 200, 255),
+                            primary_color=Color(220, 220, 220, 255),
+                            secondary_color=Color(80, 80, 80, 255),
+                            map_type=MapType.MAP2D,
+                            reference=TextureReference(builtin="checker"),
+                            repeat=(50, 50),
+                        ),
+                    )
+                ],
+                friction=1.0,
+            )
+            scene = ModularRobotScene(terrain=terrain)
+            scene.add_robot(robot)
         sim_scene, _ = scene.to_simulation_scene()
 
         batch = make_standard_batch_parameters()
@@ -172,8 +199,9 @@ def evaluate(
             return EvalResult(0.0, 0.0, 1.0)
 
         ctrl = ControlInterfaceImpl(data=data, abstraction_to_mujoco_mapping=mj_mapping)
-        ground_ids, robot_ids, foot_ids = identify_geometry_types(model)
-        non_foot = robot_ids - foot_ids
+        if not skip_drag:
+            ground_ids, robot_ids, foot_ids = identify_geometry_types(model)
+            non_foot = robot_ids - foot_ids
 
         cstep = 1.0 / batch.control_frequency
         last_ctrl = 0.0
@@ -184,9 +212,10 @@ def evaluate(
         drag = 0
         while data.time < sim_time:
             total += 1
-            contacts = get_contacts_with_ground(model, data, ground_ids, robot_ids)
-            if any(rg in non_foot for rg, *_ in contacts):
-                drag += 1
+            if not skip_drag:
+                contacts = get_contacts_with_ground(model, data, ground_ids, robot_ids)
+                if any(rg in non_foot for rg, *_ in contacts):
+                    drag += 1
             if data.time >= last_ctrl + cstep:
                 last_ctrl = math.floor(data.time / cstep) * cstep
                 ss = SimulationStateImpl(
@@ -199,7 +228,7 @@ def evaluate(
         dx = fp[0] - init_pos[0]
         dy = fp[1] - init_pos[1]
         distance = math.sqrt(dx * dx + dy * dy)
-        dragging = drag / total if total > 0 else 1.0
+        dragging = drag / total if (not skip_drag and total > 0) else 0.0
 
         if lam == 0:
             fitness = distance
@@ -215,16 +244,25 @@ def evaluate(
 
 def _eval_wrapper(args):
     (idx, norm_params, robot, coup, sim_time, lam, nu_hz, w,
-     lower, upper, evolve_phi0, evolve_w) = args
+     lower, upper, evolve_phi0, evolve_w, evolve_X, evolve_nu,
+     terrain_heights_path, terrain_z_scale, skip_drag) = args
     r = evaluate(norm_params, robot, coup, sim_time, lam, nu_hz, w,
-                 lower, upper, evolve_phi0, evolve_w)
+                 lower, upper, evolve_phi0, evolve_w, evolve_X,
+                 evolve_nu=evolve_nu,
+                 terrain_heights_path=terrain_heights_path,
+                 terrain_z_scale=terrain_z_scale,
+                 skip_drag=skip_drag)
     return idx, r
 
 
 def run_evolution(args):
+    evolve_X = not args.no_evolve_X
+    if args.skip_drag and args.lambda_penalty != 0:
+        raise ValueError("--skip-drag is only valid with --lambda 0")
     body, ks, mapping = get_structure(
         args.robot, args.coupling,
         evolve_phi0=args.evolve_phi0, evolve_w=args.evolve_w,
+        evolve_X=evolve_X, evolve_nu=args.evolve_nu,
     )
     n_params = ks.num_params
     n_osc = ks.num_oscillators
@@ -252,14 +290,31 @@ def run_evolution(args):
         variant += "_phi"
     if args.evolve_w:
         variant += "_w"
+    if args.evolve_nu:
+        variant += "_nu"
     if not variant:
         variant = "_base"
+    if args.no_evolve_X:
+        variant += "_noX"
     experiment_name = (
         f"{args.robot}_bonardi{variant}_{args.coupling}_lambda{int(args.lambda_penalty)}"
         f"_nu{nu_hz}_w{w}"
     )
     results_dir = os.path.join(args.results_dir, experiment_name)
     os.makedirs(results_dir, exist_ok=True)
+
+    terrain_heights_path = None
+    terrain_z_scale = 0.05
+    if args.terrain in ("rugged", "very_rugged"):
+        from revolve2.standards.terrains import rugged_heightmap
+        rng_terrain = np.random.RandomState(0)
+        heights = rugged_heightmap(size=(20.0, 20.0), num_edges=(500, 500), density=1.5)
+        terrain_heights_path = os.path.join(results_dir, "terrain_heights.npy")
+        np.save(terrain_heights_path, heights)
+        terrain_z_scale = 0.10 if args.terrain == "very_rugged" else 0.05
+        print(f"  Terrain:      {args.terrain} (max h={terrain_z_scale} m, 500x500 grid, saved to {terrain_heights_path})")
+    else:
+        print(f"  Terrain:      flat")
 
     print("=" * 60)
     print("BONARDI-STYLE CPG EVOLUTION")
@@ -285,6 +340,11 @@ def run_evolution(args):
     db_path = os.path.join(results_dir, f"run_{args.run_num}.sqlite")
     dbengine = open_database_sqlite(db_path, open_method=OpenMethod.OVERWITE_IF_EXISTS)
     Base.metadata.create_all(dbengine)
+
+    # Per-generation convergence CSV (small, NFS-safe alternative to SQLite)
+    conv_csv_path = os.path.join(results_dir, f"convergence_run_{args.run_num}.csv")
+    conv_csv = open(conv_csv_path, "w", buffering=1)
+    conv_csv.write("generation,best_ever_fitness,best_ever_distance,gen_max_fitness,fitness_mean,distance_mean,dragging_mean,gen_seconds\n")
 
     experiment = ComparisonExperiment(
         robot_name=args.robot,
@@ -329,7 +389,8 @@ def run_evolution(args):
         args_list = [
             (i, np.asarray(s), args.robot, args.coupling, args.sim_time,
              args.lambda_penalty, nu_hz, w, lower_native, upper_native,
-             args.evolve_phi0, args.evolve_w)
+             args.evolve_phi0, args.evolve_w, evolve_X, args.evolve_nu,
+             terrain_heights_path, terrain_z_scale, args.skip_drag)
             for i, s in enumerate(sols)
         ]
 
@@ -402,6 +463,13 @@ def run_evolution(args):
             session.add(generation)
             session.commit()
 
+        # Per-gen convergence CSV (one line per gen — NFS-safe and complete)
+        conv_csv.write(
+            f"{gen + 1},{best_fit:.6f},{best_dist:.6f},{float(np.max(fits)):.6f},"
+            f"{float(np.mean(fits)):.6f},{float(np.mean(dists)):.6f},"
+            f"{float(np.mean(drags)):.6f},{gen_time:.3f}\n"
+        )
+
         if (gen + 1) % 10 == 0 or gen == 0 or (gen + 1) == args.generations:
             print(
                 f"Gen {gen + 1:3d}/{args.generations} | "
@@ -409,6 +477,8 @@ def run_evolution(args):
                 f"gen_max={np.max(fits):.3f} drag_mean={np.mean(drags) * 100:.1f}% | "
                 f"{gen_time:.1f}s"
             )
+
+    conv_csv.close()
 
     if best_params_norm is not None:
         best_native = unnormalize(best_params_norm, lower_native, upper_native)
@@ -445,6 +515,17 @@ def main():
                         help="Also evolve per-oscillator initial phases.")
     parser.add_argument("--evolve-w", action="store_true",
                         help="Also evolve per-edge coupling strengths.")
+    parser.add_argument("--evolve-nu", action="store_true",
+                        help="Also evolve per-oscillator natural frequencies (Hz).")
+    parser.add_argument("--no-evolve-X", action="store_true",
+                        help="Do NOT evolve per-oscillator output offset X (fixed at 0).")
+    parser.add_argument("--terrain", type=str, default="flat",
+                        choices=["flat", "rugged", "very_rugged"],
+                        help="Terrain type: flat plane (default), rugged Perlin-noise "
+                             "heightmap (max h=5cm), or very_rugged (same Perlin pattern, max h=10cm).")
+    parser.add_argument("--skip-drag", action="store_true",
+                        help="Skip dragging detection during evolution (faster). "
+                             "Use when lambda=0 and drag will be measured post-hoc.")
     args = parser.parse_args()
     run_evolution(args)
 
